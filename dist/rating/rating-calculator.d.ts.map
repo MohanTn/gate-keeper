@@ -1,0 +1,1 @@
+{"version":3,"file":"rating-calculator.d.ts","sourceRoot":"","sources":["../../src/rating/rating-calculator.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,UAAU,EAAE,OAAO,EAAE,SAAS,EAAE,MAAM,UAAU,CAAC;AAQ1D,qBAAa,gBAAgB;IAC3B,SAAS,CAAC,UAAU,EAAE,SAAS,EAAE,EAAE,OAAO,EAAE,OAAO,EAAE,YAAY,EAAE,UAAU,EAAE,GAAG,MAAM;IAuBxF,uBAAuB,CAAC,MAAM,EAAE,MAAM,EAAE,aAAa,EAAE,MAAM,GAAG,MAAM;CAGvE"}

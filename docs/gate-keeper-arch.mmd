@@ -1,0 +1,59 @@
+sequenceDiagram
+    autonumber
+    participant Dev as Developer
+    participant Agent as Claude Code / Copilot
+    participant Proxy as Transparent Proxy
+    participant HookMgr as Hook Manager
+    participant Analyzer as Universal Analyzer
+    participant Parser as AST Parser (.NET/TSX)
+    participant Graph as Dependency Graph Builder
+    participant Viz as Local Viz Server (Port 5378)
+    participant Cache as SQLite Cache
+    participant UI as Status Indicator
+
+    Note over Dev,Agent: Normal Coding Session
+    Dev->>Agent: "Add repository pattern to UserService"
+    Agent->>Agent: Generate Code
+    Agent->>Proxy: Write: UserService.cs / api.tsx
+    
+    Note over Proxy: Filesystem Intercept
+    activate Proxy
+    Proxy->>Proxy: Snapshot + Detect Language
+    Proxy->>HookMgr: Async ({file, language: csharp|typescript})
+    deactivate Proxy
+    Agent-->>Dev: "Done!"
+    
+    Note over HookMgr,Parser: Background Analysis
+    HookMgr->>Analyzer: Validate file
+    activate Analyzer
+    
+    alt Language = .NET (C#)
+        Analyzer->>Parser: Roslyn AST Parse
+        Parser->>Parser: Build Syntax Tree + Symbol Table
+        Parser->>Graph: Extract Dependencies
+    else Language = React (TSX/JSX)
+        Analyzer->>Parser: TypeScript Compiler API / Babel
+        Parser->>Parser: Build AST + Component Tree
+        Parser->>Graph: Extract Hooks + Props + Context
+    end
+    
+    Graph->>Graph: Build Unified Dependency Graph
+    Graph->>Graph: Detect Patterns (Circular, Deep Nesting)
+    
+    Note over Graph,Viz: Real-time Visualization
+    Graph->>Viz: Push to WebSocket Stream
+    Viz->>Viz: Update Force-Directed Graph
+    Viz-->>Dev: http://localhost:5378
+    
+    Analyzer->>Analyzer: Compute Rating
+    
+    alt Rating Drop Detected
+        Analyzer->>HookMgr: Violation + Visual Hotspot
+        HookMgr->>Agent: Inject Context
+        Agent->>Agent: Silent Refactor
+        HookMgr->>UI: Update Status
+        UI-->>Dev: ● (tooltip: "Arch: 7.3 | Viz: localhost:5378")
+    end
+    
+    Analyzer->>Cache: Store Snapshot + Graph
+    deactivate Analyzer

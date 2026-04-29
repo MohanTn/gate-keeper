@@ -1,0 +1,78 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Commands
+
+```bash
+# First-time setup (installs deps + builds everything)
+bash scripts/setup.sh
+
+# Build TypeScript only (src/ → dist/)
+npm run build
+
+# Build dashboard only (dashboard/src/ → dashboard/dist/)
+npm run build:dashboard
+
+# Build everything
+npm run build:all
+
+# Run daemon (after building)
+npm run daemon                    # node dist/daemon.js
+
+# Run daemon in dev mode (no build step needed)
+npm run dev                       # npx tsx src/daemon.ts
+
+# Test the hook receiver manually
+echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/file.ts"}}' | node dist/hook-receiver.js
+
+# Test the analyzer directly (Node REPL)
+node -e "
+const { UniversalAnalyzer } = require('./dist/analyzer/universal-analyzer');
+new UniversalAnalyzer().analyze('/your/file.ts').then(r => console.log(JSON.stringify(r, null, 2)));
+"
+```
+
+There is no test suite yet. Use the manual invocations above to validate analysis behavior.
+
+## Architecture
+
+Gate Keeper runs as two persistent layers plus a React dashboard.
+
+### Two-process design
+
+**`src/hook-receiver.ts`** — called on every `PostToolUse` (Write/Edit) event by the Claude Code global hook in `~/.claude/settings.json`. It **must exit in under 100ms**: it checks for `.ts/.tsx/.jsx/.js/.cs` extensions, auto-starts the daemon if the PID file (`~/.gate-keeper/daemon.pid`) shows it's dead, then fires a `POST /analyze` to the daemon and returns immediately. It never does analysis itself.
+
+**`src/daemon.ts`** — long-lived Node process. Binds two ports:
+- `:5379` (localhost only) — HTTP IPC, receives `/analyze` requests from the hook-receiver
+- `:5378` — public Express + WebSocket server that serves the dashboard and broadcasts real-time updates
+
+### Analysis pipeline
+
+Each file write triggers: `UniversalAnalyzer` → language dispatch → `TypeScriptAnalyzer` or `CSharpAnalyzer` → `RatingCalculator` → `SqliteCache.save()` → `VizServer.pushAnalysis()` → WebSocket broadcast.
+
+- **`TypeScriptAnalyzer`** uses the TypeScript Compiler API (`ts.createSourceFile`) for accurate AST-based detection. Detects: hook count per component, missing `key` props in `.map()`, inline JSX handlers, `any` usage, `console.log`.
+- **`CSharpAnalyzer`** uses text/regex analysis (Roslyn via `dotnet` CLI if available). Detects: God Class (>20 methods), long methods (>50 lines), tight coupling (>5 constructor params), empty catch blocks.
+- **`RatingCalculator`** starts at 10.0, deducts: error −1.5, warning −0.5, info −0.1, complexity >20 −2, imports >30 −2, LOC >500 −1.5. Circular deps apply a separate −1.0 per cycle.
+
+### Dependency graph & cycle detection
+
+`DependencyGraph` maintains an in-memory map of all analyzed `FileAnalysis` objects. `detectCycles()` uses iterative DFS with a visited/stack set. Only edges where both source and target are known files are included (external npm imports are tracked but not graphed). `VizServer` loads the cache on startup so the graph survives daemon restarts.
+
+### Dashboard
+
+`dashboard/` is a standalone Vite + React app. It connects via WebSocket to `:5378`, receives `init` (full graph) on connect and `update` (delta) on each new analysis. Node shapes encode language: circle = TS/JS, square = C#, triangle = TSX/JSX. Node color encodes rating: green ≥8, yellow ≥6, orange ≥4, red <4. The dashboard auto-opens in the browser when overall rating drops below 5.0.
+
+### Persistence
+
+`SqliteCache` writes to `~/.gate-keeper/cache.db`. It stores the full `FileAnalysis` JSON plus a `rating_history` table for trend data. The `VizServer` pre-loads all cached analyses on daemon startup.
+
+### Ports & files
+
+| Port / Path | Purpose |
+|---|---|
+| `:5378` | Dashboard WebSocket + static files |
+| `:5379` | Daemon IPC (localhost only) |
+| `~/.gate-keeper/cache.db` | SQLite analysis cache |
+| `~/.gate-keeper/daemon.pid` | PID file — hook-receiver uses this to check daemon liveness |
+| `dashboard/dist/` | Built dashboard, served at `/viz/` |
