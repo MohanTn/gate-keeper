@@ -56,11 +56,13 @@ export interface GraphData {
 }
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
   error?: string;
+  scanTotal?: number;
+  scanAnalyzed?: number;
 }
 
 export interface HookPayload {
@@ -85,4 +87,8 @@ export interface DaemonStatus {
   port: number;
   analyzedFiles: number;
   overallRating: number;
+}
+
+export interface Config {
+  minRating: number;
 }

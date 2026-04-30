@@ -31,7 +31,11 @@ async function main(): Promise<void> {
   if (!WATCHED_EXTENSIONS.has(ext)) return;
 
   await ensureDaemonRunning();
+  // Fire-and-forget: daemon analyzes asynchronously so this exits in < 100ms.
+  // Feedback for the CURRENT file will be queued by the daemon and delivered
+  // on the NEXT PostToolUse call via getFeedback() below.
   await sendToDaemon(filePath);
+  await outputPendingFeedback();
 }
 
 function readStdin(): Promise<HookPayload | null> {
@@ -106,6 +110,39 @@ function sendToDaemon(filePath: string): Promise<void> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// Fetches any low-rating messages queued by the daemon and writes them to
+// stdout. Claude Code reads hook stdout and surfaces it to the model as
+// additional context after the tool use completes.
+function outputPendingFeedback(): Promise<void> {
+  return new Promise(resolve => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: IPC_PORT,
+        path: '/feedback',
+        method: 'GET'
+      },
+      res => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => (body += chunk));
+        res.on('end', () => {
+          try {
+            const { messages } = JSON.parse(body) as { messages: string[] };
+            if (messages.length > 0) {
+              process.stdout.write(messages.join('\n\n') + '\n');
+            }
+          } catch {}
+          resolve();
+        });
+      }
+    );
+    req.on('error', () => resolve());
+    req.setTimeout(1000, () => { req.destroy(); resolve(); });
+    req.end();
+  });
 }
 
 main().catch(() => {}).finally(() => process.exit(0));

@@ -11,30 +11,32 @@ interface MetricCardProps {
 }
 
 export function MetricCard({ title, value, subtitle, alert, trend, onClick, color }: MetricCardProps) {
-  const borderColor = alert ? '#f44336' : (color ?? '#3f51b5');
+  const accentColor = alert ? '#ef4444' : (color ?? '#3b82f6');
 
   return (
     <div
       onClick={onClick}
       style={{
-        background: '#16213e',
-        border: `1px solid ${borderColor}`,
-        borderRadius: 8,
+        background: '#0f172a',
+        border: `1px solid #1e293b`,
+        borderLeft: `3px solid ${accentColor}`,
+        borderRadius: 6,
         padding: '12px 16px',
-        marginBottom: 12,
-        cursor: onClick ? 'pointer' : 'default',
-        transition: 'border-color 0.2s'
+        marginBottom: 10,
+        cursor: onClick ? 'pointer' : 'default'
       }}
     >
-      <div style={{ fontSize: 11, color: '#9e9e9e', textTransform: 'uppercase', letterSpacing: 1 }}>
+      <div style={{ fontSize: 11, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>
         {title}
       </div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: borderColor, marginTop: 4 }}>
+      <div style={{ fontSize: 28, fontWeight: 800, color: accentColor, lineHeight: 1 }}>
         {value}
-        {trend === 'up' && <span style={{ fontSize: 14, marginLeft: 6, color: '#4caf50' }}>↑</span>}
-        {trend === 'down' && <span style={{ fontSize: 14, marginLeft: 6, color: '#f44336' }}>↓</span>}
+        {trend === 'up' && <span style={{ fontSize: 14, marginLeft: 6, color: '#22c55e' }}>↑</span>}
+        {trend === 'down' && <span style={{ fontSize: 14, marginLeft: 6, color: '#ef4444' }}>↓</span>}
       </div>
-      {subtitle && <div style={{ fontSize: 12, color: '#757575', marginTop: 4 }}>{subtitle}</div>}
+      {subtitle && (
+        <div style={{ fontSize: 12, color: '#475569', marginTop: 4 }}>{subtitle}</div>
+      )}
     </div>
   );
 }

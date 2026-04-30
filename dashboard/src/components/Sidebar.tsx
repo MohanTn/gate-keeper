@@ -1,214 +1,422 @@
-import React from 'react';
-import { GraphData, GraphNode } from '../types';
-import { MetricCard } from './MetricCard';
+import React, { useEffect, useState } from 'react';
+import { GraphData, GraphNode, FileDetailResponse } from '../types';
 
 interface SidebarProps {
   graphData: GraphData;
   selectedNode: GraphNode | null;
   onClearSelection: () => void;
+  onNodeSelect: (node: GraphNode) => void;
 }
 
-function ratingColor(rating: number): string {
-  if (rating >= 8) return '#4caf50';
-  if (rating >= 6) return '#ffc107';
-  if (rating >= 4) return '#ff9800';
-  return '#f44336';
+// ── Design tokens ──────────────────────────────────────────
+const T = {
+  panel:       '#111827',
+  panelHover:  '#1a2332',
+  border:      '#1e293b',
+  borderBright:'#2d3f55',
+  text:        '#f1f5f9',
+  textMuted:   '#94a3b8',
+  textFaint:   '#475569',
+  green:       '#22c55e',
+  yellow:      '#eab308',
+  orange:      '#f97316',
+  red:         '#ef4444',
+  accent:      '#3b82f6',
+};
+
+function rc(r: number) {
+  if (r >= 8) return T.green;
+  if (r >= 6) return T.yellow;
+  if (r >= 4) return T.orange;
+  return T.red;
 }
 
-function overallRating(nodes: GraphNode[]): number {
-  if (nodes.length === 0) return 10;
-  const sum = nodes.reduce((acc, n) => acc + n.rating, 0);
-  return Math.round((sum / nodes.length) * 10) / 10;
+function RatingBar({ rating }: { rating: number }) {
+  const pct = (rating / 10) * 100;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ width: 52, height: 5, background: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: rc(rating), borderRadius: 3 }} />
+      </div>
+      <span style={{ fontSize: 13, color: rc(rating), fontWeight: 700, minWidth: 26 }}>{rating}</span>
+    </div>
+  );
 }
 
-function countCircularDeps(graphData: GraphData): number {
-  // Simple cycle detection: if A→B and B→A exist
-  const edgeSet = new Set<string>();
-  let cycles = 0;
-  for (const edge of graphData.edges) {
-    const src = typeof edge.source === 'string' ? edge.source : edge.source.id;
-    const tgt = typeof edge.target === 'string' ? edge.target : edge.target.id;
-    const forward = `${src}→${tgt}`;
-    const backward = `${tgt}→${src}`;
-    if (edgeSet.has(backward)) cycles++;
-    edgeSet.add(forward);
-  }
-  return cycles;
-}
-
-export function Sidebar({ graphData, selectedNode, onClearSelection }: SidebarProps) {
-  const styles = {
-    container: {
-      width: 300,
-      minWidth: 300,
-      background: '#0f3460',
-      padding: 20,
-      overflowY: 'auto' as const,
-      borderLeft: '1px solid #1a1a4e'
-    },
-    header: {
-      fontSize: 18,
+function LangBadge({ lang }: { lang: string }) {
+  const colors: Record<string, string> = {
+    typescript: '#3b82f6', tsx: '#06b6d4', jsx: '#f59e0b', csharp: '#a78bfa'
+  };
+  const labels: Record<string, string> = {
+    typescript: 'TS', tsx: 'TSX', jsx: 'JSX', csharp: 'C#'
+  };
+  const color = colors[lang] ?? '#64748b';
+  return (
+    <span style={{
+      fontSize: 10,
       fontWeight: 700,
-      marginBottom: 16,
-      color: '#e040fb',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between'
-    },
-    tag: (color: string) => ({
-      display: 'inline-block',
-      background: color,
-      color: '#fff',
-      borderRadius: 4,
-      padding: '2px 8px',
-      fontSize: 11,
-      fontWeight: 600,
-      marginBottom: 12
-    }),
-    violationItem: (severity: string) => ({
-      background: severity === 'error' ? '#3b1a1a' : severity === 'warning' ? '#3b2d0a' : '#1a2a3b',
-      borderLeft: `3px solid ${severity === 'error' ? '#f44336' : severity === 'warning' ? '#ffc107' : '#42a5f5'}`,
-      padding: '8px 12px',
-      marginBottom: 8,
-      borderRadius: '0 4px 4px 0',
-      fontSize: 13
-    }),
-    fixText: {
-      fontSize: 11,
-      color: '#4caf50',
-      marginTop: 4,
-      fontStyle: 'italic'
-    },
-    backBtn: {
-      background: 'none',
-      border: '1px solid #3f51b5',
-      color: '#90caf9',
-      borderRadius: 4,
-      padding: '4px 10px',
-      cursor: 'pointer',
-      fontSize: 12
-    }
+      color,
+      border: `1px solid ${color}`,
+      borderRadius: 3,
+      padding: '1px 5px',
+      letterSpacing: 0.5,
+      whiteSpace: 'nowrap' as const
+    }}>
+      {labels[lang] ?? lang.toUpperCase()}
+    </span>
+  );
+}
+
+function SevDot({ severity }: { severity: string }) {
+  const c = severity === 'error' ? T.red : severity === 'warning' ? T.yellow : T.textFaint;
+  return <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: c, marginRight: 4 }} />;
+}
+
+type SortField = 'rating' | 'label' | 'linesOfCode' | 'violations';
+
+// ── Main component ─────────────────────────────────────────
+export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelect }: SidebarProps) {
+  const [fileDetail, setFileDetail] = useState<FileDetailResponse | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [sortField, setSortField] = useState<SortField>('rating');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+
+  useEffect(() => {
+    if (!selectedNode) { setFileDetail(null); return; }
+    setDetailLoading(true);
+    fetch(`/api/file-detail?file=${encodeURIComponent(selectedNode.id)}`)
+      .then(r => r.ok ? r.json() : null)
+      .then((d: FileDetailResponse | null) => { setFileDetail(d); setDetailLoading(false); })
+      .catch(() => setDetailLoading(false));
+  }, [selectedNode?.id]);
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortField(field); setSortDir('asc'); }
   };
 
-  if (selectedNode) {
-    const depCount = graphData.edges.filter(e => {
-      const src = typeof e.source === 'string' ? e.source : e.source.id;
-      return src === selectedNode.id;
-    }).length;
+  if (selectedNode) return (
+    <FileDetailPanel
+      node={selectedNode}
+      detail={fileDetail}
+      loading={detailLoading}
+      graphData={graphData}
+      onBack={onClearSelection}
+      onNodeSelect={onNodeSelect}
+    />
+  );
 
-    return (
-      <div style={styles.container}>
-        <div style={styles.header}>
-          <span>File Details</span>
-          <button style={styles.backBtn} onClick={onClearSelection}>← Back</button>
-        </div>
+  // ── Overview + file table ──
+  const overallRating = graphData.nodes.length > 0
+    ? graphData.nodes.reduce((a, n) => a + n.rating, 0) / graphData.nodes.length
+    : null;
 
-        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 8, wordBreak: 'break-all' }}>
-          {selectedNode.label}
-        </div>
-        <div style={styles.tag(ratingColor(selectedNode.rating))}>
-          Rating: {selectedNode.rating}/10
-        </div>
-        <div style={styles.tag('#607d8b')}>{selectedNode.type.toUpperCase()}</div>
+  const totalViolations = graphData.nodes.reduce((a, n) => a + n.violations.length, 0);
+  const errors = graphData.nodes.reduce((a, n) => a + n.violations.filter(v => v.severity === 'error').length, 0);
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
-          <MetricCard title="Lines" value={selectedNode.metrics.linesOfCode} color="#42a5f5" />
-          <MetricCard title="Complexity" value={selectedNode.metrics.cyclomaticComplexity} color="#ab47bc" />
-          <MetricCard title="Methods" value={selectedNode.metrics.numberOfMethods} color="#26c6da" />
-          <MetricCard title="Imports" value={selectedNode.metrics.importCount} color="#ffca28" />
-        </div>
+  const sorted = [...graphData.nodes].sort((a, b) => {
+    let av: number, bv: number;
+    if (sortField === 'rating')     { av = a.rating; bv = b.rating; }
+    else if (sortField === 'label') { return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label); }
+    else if (sortField === 'linesOfCode') { av = a.metrics.linesOfCode; bv = b.metrics.linesOfCode; }
+    else { av = a.violations.length; bv = b.violations.length; }
+    return sortDir === 'asc' ? av - bv : bv - av;
+  });
 
-        {selectedNode.violations.length > 0 && (
-          <>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: '#ccc' }}>
-              Violations ({selectedNode.violations.length})
-            </div>
-            {selectedNode.violations.map((v, i) => (
-              <div key={i} style={styles.violationItem(v.severity)}>
-                <div>{v.message}</div>
-                {v.line && <div style={{ fontSize: 11, color: '#9e9e9e', marginTop: 2 }}>Line {v.line}</div>}
-                {v.fix && <div style={styles.fixText}>Fix: {v.fix}</div>}
-              </div>
-            ))}
-          </>
-        )}
-
-        <div style={{ fontSize: 13, fontWeight: 600, marginTop: 16, marginBottom: 8, color: '#ccc' }}>
-          Dependencies ({depCount})
-        </div>
-        {graphData.edges
-          .filter(e => {
-            const src = typeof e.source === 'string' ? e.source : e.source.id;
-            return src === selectedNode.id;
-          })
-          .map((e, i) => {
-            const tgt = typeof e.target === 'string' ? e.target : e.target.id;
-            return (
-              <div key={i} style={{ fontSize: 12, color: '#9e9e9e', paddingBottom: 4 }}>
-                → {tgt.split('/').pop()}
-              </div>
-            );
-          })}
-      </div>
-    );
-  }
-
-  const rating = overallRating(graphData.nodes);
-  const cycles = countCircularDeps(graphData);
-  const hotspots = [...graphData.nodes].sort((a, b) => a.rating - b.rating).slice(0, 5);
+  const sortArrow = (f: SortField) => sortField === f ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
 
   return (
-    <div style={styles.container}>
-      <div style={styles.header}>Architecture Health</div>
+    <div style={{ width: 380, minWidth: 380, background: T.panel, display: 'flex', flexDirection: 'column', borderLeft: `1px solid ${T.border}`, overflow: 'hidden' }}>
 
-      <MetricCard
-        title="Overall Rating"
-        value={`${rating}/10`}
-        trend={rating < 6 ? 'down' : 'up'}
-        color={ratingColor(rating)}
-      />
-      <MetricCard
-        title="Files Analyzed"
-        value={graphData.nodes.length}
-        color="#42a5f5"
-      />
-      <MetricCard
-        title="Circular Dependencies"
-        value={cycles}
-        alert={cycles > 0}
-        subtitle={cycles > 0 ? 'Circular deps degrade maintainability' : 'None detected'}
-      />
-      <MetricCard
-        title="Total Violations"
-        value={graphData.nodes.reduce((acc, n) => acc + n.violations.length, 0)}
-        alert={graphData.nodes.some(n => n.violations.some(v => v.severity === 'error'))}
-      />
+      {/* Summary bar */}
+      <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+        <div style={{ fontSize: 11, color: T.textFaint, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12 }}>
+          Workspace Health
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <SummaryCard
+            label="Arch Score"
+            value={overallRating !== null ? `${overallRating.toFixed(1)}/10` : '—'}
+            color={overallRating !== null ? rc(overallRating) : T.textFaint}
+          />
+          <SummaryCard label="Files" value={graphData.nodes.length} color={T.accent} />
+          <SummaryCard
+            label="Violations"
+            value={totalViolations}
+            color={totalViolations > 0 ? T.yellow : T.green}
+          />
+          <SummaryCard
+            label="Errors"
+            value={errors}
+            color={errors > 0 ? T.red : T.green}
+          />
+        </div>
+      </div>
 
-      {hotspots.length > 0 && (
-        <>
-          <div style={{ fontSize: 13, fontWeight: 600, marginTop: 8, marginBottom: 8, color: '#ccc' }}>
-            Hotspots (lowest rated)
+      {/* File table header */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 44px 100px 44px 44px',
+        gap: 0,
+        padding: '8px 20px',
+        borderBottom: `1px solid ${T.border}`,
+        flexShrink: 0
+      }}>
+        {([['label', 'File'], ['', 'Lang'], ['rating', 'Rating'], ['linesOfCode', 'LOC'], ['violations', 'Issues']] as [SortField | '', string][]).map(([field, label]) => (
+          <div
+            key={label}
+            onClick={() => field && handleSort(field as SortField)}
+            style={{
+              fontSize: 11,
+              color: (field && sortField === field) ? T.accent : T.textFaint,
+              textTransform: 'uppercase',
+              letterSpacing: 0.8,
+              cursor: field ? 'pointer' : 'default',
+              userSelect: 'none',
+              whiteSpace: 'nowrap' as const
+            }}
+          >
+            {label}{field && sortArrow(field as SortField)}
           </div>
-          {hotspots.map(node => (
-            <div
-              key={node.id}
-              style={{
-                background: '#16213e',
-                borderLeft: `3px solid ${ratingColor(node.rating)}`,
-                padding: '6px 12px',
-                marginBottom: 6,
-                borderRadius: '0 4px 4px 0',
-                fontSize: 13
-              }}
-            >
-              <div style={{ fontWeight: 500 }}>{node.label}</div>
-              <div style={{ color: ratingColor(node.rating), fontSize: 12 }}>
-                {node.rating}/10 · {node.violations.length} violations
+        ))}
+      </div>
+
+      {/* File rows */}
+      <div style={{ flex: 1, overflowY: 'auto' }}>
+        {sorted.length === 0 ? (
+          <div style={{ padding: 32, textAlign: 'center', color: T.textFaint, fontSize: 13 }}>
+            No files analyzed yet.<br />
+            <span style={{ fontSize: 12 }}>Click "Scan All Files" to begin.</span>
+          </div>
+        ) : sorted.map(node => (
+          <div
+            key={node.id}
+            onClick={() => onNodeSelect(node)}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 44px 100px 44px 44px',
+              alignItems: 'center',
+              padding: '9px 20px',
+              borderBottom: `1px solid ${T.border}`,
+              cursor: 'pointer',
+              transition: 'background 0.1s'
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = T.panelHover)}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+          >
+            <div style={{ overflow: 'hidden' }}>
+              <div style={{ fontSize: 14, color: T.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
+                {node.label}
+              </div>
+              {node.violations.some(v => v.severity === 'error') && (
+                <div style={{ fontSize: 11, color: T.red, marginTop: 1 }}>
+                  {node.violations.filter(v => v.severity === 'error').length} error{node.violations.filter(v => v.severity === 'error').length !== 1 ? 's' : ''}
+                </div>
+              )}
+            </div>
+            <div><LangBadge lang={node.type} /></div>
+            <div><RatingBar rating={node.rating} /></div>
+            <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'right' as const }}>{node.metrics.linesOfCode}</div>
+            <div style={{ fontSize: 13, color: node.violations.length > 0 ? T.yellow : T.textFaint, textAlign: 'right' as const, fontWeight: node.violations.length > 0 ? 600 : 400 }}>
+              {node.violations.length}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Summary card (mini) ────────────────────────────────────
+function SummaryCard({ label, value, color }: { label: string; value: number | string; color: string }) {
+  return (
+    <div style={{ background: '#0f172a', borderRadius: 6, padding: '10px 14px', border: `1px solid ${T.border}` }}>
+      <div style={{ fontSize: 11, color: T.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 22, fontWeight: 700, color }}>{value}</div>
+    </div>
+  );
+}
+
+// ── File detail panel ──────────────────────────────────────
+function FileDetailPanel({
+  node, detail, loading, graphData, onBack, onNodeSelect
+}: {
+  node: GraphNode;
+  detail: FileDetailResponse | null;
+  loading: boolean;
+  graphData: GraphData;
+  onBack: () => void;
+  onNodeSelect: (n: GraphNode) => void;
+}) {
+  const depCount = graphData.edges.filter(e => {
+    const src = typeof e.source === 'string' ? e.source : e.source.id;
+    return src === node.id;
+  }).length;
+
+  return (
+    <div style={{ width: 380, minWidth: 380, background: T.panel, display: 'flex', flexDirection: 'column', borderLeft: `1px solid ${T.border}`, overflow: 'hidden' }}>
+
+      {/* File header */}
+      <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+          <button
+            onClick={onBack}
+            style={{ background: 'none', border: `1px solid ${T.border}`, color: T.textMuted, borderRadius: 5, padding: '4px 10px', cursor: 'pointer', fontSize: 12 }}
+          >
+            ← Files
+          </button>
+          <LangBadge lang={node.type} />
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 700, color: T.text, wordBreak: 'break-all' }}>
+          {node.label}
+        </div>
+        <div style={{ fontSize: 12, color: T.textFaint, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }} title={node.id}>
+          {node.id}
+        </div>
+      </div>
+
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 20px' }}>
+
+        {/* Rating + git diff */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
+          <div>
+            <SectionLabel>Rating</SectionLabel>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
+              <span style={{ fontSize: 32, fontWeight: 800, color: rc(node.rating) }}>{node.rating}</span>
+              <span style={{ fontSize: 14, color: T.textFaint }}>/10</span>
+            </div>
+          </div>
+          {detail?.gitDiff ? (
+            <div>
+              <SectionLabel>Changes vs HEAD</SectionLabel>
+              <div style={{ display: 'flex', gap: 10, marginTop: 4, alignItems: 'center' }}>
+                <span style={{ fontSize: 18, fontWeight: 700, color: T.green }}>+{detail.gitDiff.added}</span>
+                <span style={{ fontSize: 18, fontWeight: 700, color: T.red }}>−{detail.gitDiff.removed}</span>
               </div>
             </div>
-          ))}
-        </>
-      )}
+          ) : (
+            <div>
+              <SectionLabel>Changes vs HEAD</SectionLabel>
+              <div style={{ fontSize: 13, color: T.textFaint, marginTop: 4 }}>{loading ? 'Loading…' : 'No changes'}</div>
+            </div>
+          )}
+        </div>
+
+        {/* Metrics grid */}
+        <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
+          <SectionLabel>Metrics</SectionLabel>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
+            <MetricRow label="Lines of Code" value={node.metrics.linesOfCode} />
+            <MetricRow label="Complexity" value={node.metrics.cyclomaticComplexity} warn={node.metrics.cyclomaticComplexity > 10} />
+            <MetricRow label="Methods" value={node.metrics.numberOfMethods} />
+            <MetricRow label="Imports" value={node.metrics.importCount} warn={node.metrics.importCount > 15} />
+            <MetricRow label="Classes" value={node.metrics.numberOfClasses} />
+            <MetricRow label="Dependencies" value={depCount} />
+          </div>
+        </div>
+
+        {/* Rating breakdown */}
+        {detail && (
+          <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
+            <SectionLabel>Rating Breakdown</SectionLabel>
+            {detail.ratingBreakdown.length === 0 ? (
+              <div style={{ marginTop: 8, fontSize: 13, color: T.green }}>✓ No deductions — clean file</div>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: T.textFaint }}>Base</span>
+                  <span style={{ fontSize: 12, color: T.textMuted }}>10.0</span>
+                </div>
+                {detail.ratingBreakdown.map((item, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: `1px solid ${T.border}` }}>
+                    <div>
+                      <div style={{ fontSize: 13, color: T.text }}>{item.category}</div>
+                      <div style={{ fontSize: 11, color: T.textFaint }}>{item.detail}</div>
+                    </div>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: T.red, marginLeft: 12 }}>
+                      −{item.deduction.toFixed(1)}
+                    </span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: `1px solid ${T.borderBright}` }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Final</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: rc(node.rating) }}>{node.rating}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Violations */}
+        {node.violations.length > 0 && (
+          <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
+            <SectionLabel>Violations ({node.violations.length})</SectionLabel>
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {node.violations.map((v, i) => (
+                <div key={i} style={{
+                  background: '#0f172a',
+                  borderLeft: `3px solid ${v.severity === 'error' ? T.red : v.severity === 'warning' ? T.yellow : T.accent}`,
+                  padding: '8px 12px',
+                  borderRadius: '0 5px 5px 0'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
+                    <SevDot severity={v.severity} />
+                    <span style={{ fontSize: 13, color: T.text, lineHeight: 1.4 }}>{v.message}</span>
+                  </div>
+                  {v.line && <div style={{ fontSize: 11, color: T.textFaint, marginTop: 3 }}>Line {v.line}</div>}
+                  {v.fix && <div style={{ fontSize: 11, color: T.green, marginTop: 3, fontStyle: 'italic' }}>Fix: {v.fix}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Dependencies */}
+        {depCount > 0 && (
+          <div style={{ paddingTop: 14 }}>
+            <SectionLabel>Imports ({depCount})</SectionLabel>
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {graphData.edges
+                .filter(e => {
+                  const src = typeof e.source === 'string' ? e.source : e.source.id;
+                  return src === node.id;
+                })
+                .map((e, i) => {
+                  const tgt = typeof e.target === 'string' ? e.target : e.target.id;
+                  const targetNode = graphData.nodes.find(n => n.id === tgt);
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => targetNode && onNodeSelect(targetNode)}
+                      style={{ fontSize: 13, color: targetNode ? T.accent : T.textFaint, cursor: targetNode ? 'pointer' : 'default', padding: '3px 0' }}
+                    >
+                      → {tgt.split('/').pop()}
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <div style={{ fontSize: 11, color: T.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
+      {children}
+    </div>
+  );
+}
+
+function MetricRow({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
+  return (
+    <div style={{ background: '#0f172a', borderRadius: 5, padding: '8px 12px' }}>
+      <div style={{ fontSize: 11, color: T.textFaint, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: warn ? T.yellow : T.text }}>{value}</div>
     </div>
   );
 }

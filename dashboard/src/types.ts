@@ -53,10 +53,29 @@ export interface FileAnalysis {
   metrics: Metrics;
 }
 
+export interface RatingBreakdownItem {
+  category: string;
+  deduction: number;
+  detail: string;
+}
+
+export interface GitDiffStats {
+  added: number;
+  removed: number;
+}
+
+export interface FileDetailResponse {
+  analysis: FileAnalysis;
+  ratingBreakdown: RatingBreakdownItem[];
+  gitDiff: GitDiffStats | null;
+}
+
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
   error?: string;
+  scanTotal?: number;
+  scanAnalyzed?: number;
 }
