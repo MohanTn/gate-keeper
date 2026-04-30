@@ -74,26 +74,123 @@ function SevDot({ severity }: { severity: string }) {
 
 type SortField = 'rating' | 'label' | 'linesOfCode' | 'violations';
 
+// ── Sub-components extracted to avoid inline handlers ──────
+
+function SortHeaderCell({ field, label, sortField, sortDir, onSort }: {
+  field: SortField | '';
+  label: string;
+  sortField: SortField;
+  sortDir: 'asc' | 'desc';
+  onSort: (f: SortField) => void;
+}) {
+  const handleClick = useCallback(() => { if (field) onSort(field as SortField); }, [field, onSort]);
+  const arrow = field && sortField === field ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+  return (
+    <div
+      onClick={field ? handleClick : undefined}
+      style={{
+        fontSize: 11,
+        color: (field && sortField === field) ? T.accent : T.textFaint,
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
+        cursor: field ? 'pointer' : 'default',
+        userSelect: 'none',
+        whiteSpace: 'nowrap' as const
+      }}
+    >
+      {label}{arrow}
+    </div>
+  );
+}
+
+function FileRow({ node, onNodeSelect }: { node: GraphNode; onNodeSelect: (n: GraphNode) => void }) {
+  const handleClick = useCallback(() => onNodeSelect(node), [node, onNodeSelect]);
+  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = T.panelHover;
+  }, []);
+  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  }, []);
+  const errorCount = node.violations.filter(v => v.severity === 'error').length;
+
+  return (
+    <div
+      onClick={handleClick}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 44px 100px 44px 44px',
+        alignItems: 'center',
+        padding: '9px 20px',
+        borderBottom: `1px solid ${T.border}`,
+        cursor: 'pointer',
+        transition: 'background 0.1s'
+      }}
+    >
+      <div style={{ overflow: 'hidden' }}>
+        <div style={{ fontSize: 14, color: T.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
+          {node.label}
+        </div>
+        {errorCount > 0 && (
+          <div style={{ fontSize: 11, color: T.red, marginTop: 1 }}>
+            {errorCount} error{errorCount !== 1 ? 's' : ''}
+          </div>
+        )}
+      </div>
+      <div><LangBadge lang={node.type} /></div>
+      <div><RatingBar rating={node.rating} /></div>
+      <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'right' as const }}>{node.metrics.linesOfCode}</div>
+      <div style={{ fontSize: 13, color: node.violations.length > 0 ? T.yellow : T.textFaint, textAlign: 'right' as const, fontWeight: node.violations.length > 0 ? 600 : 400 }}>
+        {node.violations.length}
+      </div>
+    </div>
+  );
+}
+
+function DepLink({ tgt, targetNode, onNodeSelect }: {
+  tgt: string;
+  targetNode: GraphNode | undefined;
+  onNodeSelect: (n: GraphNode) => void;
+}) {
+  const handleClick = useCallback(() => { if (targetNode) onNodeSelect(targetNode); }, [targetNode, onNodeSelect]);
+  return (
+    <div
+      onClick={targetNode ? handleClick : undefined}
+      style={{ fontSize: 13, color: targetNode ? T.accent : T.textFaint, cursor: targetNode ? 'pointer' : 'default', padding: '3px 0' }}
+    >
+      → {tgt.split('/').pop()}
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────
 export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelect }: SidebarProps) {
-  const [fileDetail, setFileDetail] = useState<FileDetailResponse | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [sortField, setSortField] = useState<SortField>('rating');
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
+  const [state, setState] = useState<{
+    fileDetail: FileDetailResponse | null;
+    detailLoading: boolean;
+    sortField: SortField;
+    sortDir: 'asc' | 'desc';
+  }>({ fileDetail: null, detailLoading: false, sortField: 'rating', sortDir: 'asc' });
+
+  const { fileDetail, detailLoading, sortField, sortDir } = state;
 
   useEffect(() => {
-    if (!selectedNode) { setFileDetail(null); return; }
-    setDetailLoading(true);
+    if (!selectedNode) { setState(s => ({ ...s, fileDetail: null })); return; }
+    setState(s => ({ ...s, detailLoading: true }));
     fetch(`/api/file-detail?file=${encodeURIComponent(selectedNode.id)}`)
       .then(r => r.ok ? r.json() : null)
-      .then((d: FileDetailResponse | null) => { setFileDetail(d); setDetailLoading(false); })
-      .catch(() => setDetailLoading(false));
+      .then((d: FileDetailResponse | null) => setState(s => ({ ...s, fileDetail: d, detailLoading: false })))
+      .catch(() => setState(s => ({ ...s, detailLoading: false })));
   }, [selectedNode?.id]);
 
-  const handleSort = (field: SortField) => {
-    if (sortField === field) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortField(field); setSortDir('asc'); }
-  };
+  const handleSort = useCallback((field: SortField) => {
+    setState(s => ({
+      ...s,
+      sortField: field,
+      sortDir: s.sortField === field ? (s.sortDir === 'asc' ? 'desc' : 'asc') : 'asc',
+    }));
+  }, []);
 
   if (selectedNode) return (
     <FileDetailPanel
@@ -116,14 +213,16 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
 
   const sorted = [...graphData.nodes].sort((a, b) => {
     let av: number, bv: number;
-    if (sortField === 'rating')     { av = a.rating; bv = b.rating; }
-    else if (sortField === 'label') { return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label); }
+    if (sortField === 'rating')          { av = a.rating; bv = b.rating; }
+    else if (sortField === 'label')      { return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label); }
     else if (sortField === 'linesOfCode') { av = a.metrics.linesOfCode; bv = b.metrics.linesOfCode; }
-    else { av = a.violations.length; bv = b.violations.length; }
+    else                                  { av = a.violations.length; bv = b.violations.length; }
     return sortDir === 'asc' ? av - bv : bv - av;
   });
 
-  const sortArrow = (f: SortField) => sortField === f ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+  const columns: [SortField | '', string][] = [
+    ['label', 'File'], ['', 'Lang'], ['rating', 'Rating'], ['linesOfCode', 'LOC'], ['violations', 'Issues']
+  ];
 
   return (
     <div style={{ width: 380, minWidth: 380, background: T.panel, display: 'flex', flexDirection: 'column', borderLeft: `1px solid ${T.border}`, overflow: 'hidden' }}>
@@ -162,22 +261,15 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
         borderBottom: `1px solid ${T.border}`,
         flexShrink: 0
       }}>
-        {([['label', 'File'], ['', 'Lang'], ['rating', 'Rating'], ['linesOfCode', 'LOC'], ['violations', 'Issues']] as [SortField | '', string][]).map(([field, label]) => (
-          <div
+        {columns.map(([field, label]) => (
+          <SortHeaderCell
             key={label}
-            onClick={() => field && handleSort(field as SortField)}
-            style={{
-              fontSize: 11,
-              color: (field && sortField === field) ? T.accent : T.textFaint,
-              textTransform: 'uppercase',
-              letterSpacing: 0.8,
-              cursor: field ? 'pointer' : 'default',
-              userSelect: 'none',
-              whiteSpace: 'nowrap' as const
-            }}
-          >
-            {label}{field && sortArrow(field as SortField)}
-          </div>
+            field={field}
+            label={label}
+            sortField={sortField}
+            sortDir={sortDir}
+            onSort={handleSort}
+          />
         ))}
       </div>
 
@@ -189,38 +281,7 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
             <span style={{ fontSize: 12 }}>Click "Scan All Files" to begin.</span>
           </div>
         ) : sorted.map(node => (
-          <div
-            key={node.id}
-            onClick={() => onNodeSelect(node)}
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 44px 100px 44px 44px',
-              alignItems: 'center',
-              padding: '9px 20px',
-              borderBottom: `1px solid ${T.border}`,
-              cursor: 'pointer',
-              transition: 'background 0.1s'
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = T.panelHover)}
-            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-          >
-            <div style={{ overflow: 'hidden' }}>
-              <div style={{ fontSize: 14, color: T.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' as const }}>
-                {node.label}
-              </div>
-              {node.violations.some(v => v.severity === 'error') && (
-                <div style={{ fontSize: 11, color: T.red, marginTop: 1 }}>
-                  {node.violations.filter(v => v.severity === 'error').length} error{node.violations.filter(v => v.severity === 'error').length !== 1 ? 's' : ''}
-                </div>
-              )}
-            </div>
-            <div><LangBadge lang={node.type} /></div>
-            <div><RatingBar rating={node.rating} /></div>
-            <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'right' as const }}>{node.metrics.linesOfCode}</div>
-            <div style={{ fontSize: 13, color: node.violations.length > 0 ? T.yellow : T.textFaint, textAlign: 'right' as const, fontWeight: node.violations.length > 0 ? 600 : 400 }}>
-              {node.violations.length}
-            </div>
-          </div>
+          <FileRow key={node.id} node={node} onNodeSelect={onNodeSelect} />
         ))}
       </div>
     </div>
@@ -390,13 +451,7 @@ function FileDetailPanel({
                   const tgt = typeof e.target === 'string' ? e.target : e.target.id;
                   const targetNode = graphData.nodes.find(n => n.id === tgt);
                   return (
-                    <div
-                      key={i}
-                      onClick={() => targetNode && onNodeSelect(targetNode)}
-                      style={{ fontSize: 13, color: targetNode ? T.accent : T.textFaint, cursor: targetNode ? 'pointer' : 'default', padding: '3px 0' }}
-                    >
-                      → {tgt.split('/').pop()}
-                    </div>
+                    <DepLink key={i} tgt={tgt} targetNode={targetNode} onNodeSelect={onNodeSelect} />
                   );
                 })}
             </div>

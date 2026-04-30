@@ -44,8 +44,15 @@ function useShiftKey(): React.MutableRefObject<boolean> {
   return shiftRef;
 }
 
+/**
+ * Manages pinned node positions using a stable ref so that drag-end writes
+ * never trigger a React re-render (and therefore never restart the simulation).
+ * `initVersion` is the only signal that rebuilds forceData — it increments once
+ * when the server-side positions load completes.
+ */
 function useNodePositions(selectedRepo: string | null, nodeCount: number) {
-  const [positions, setPositions] = useState<Map<string, { x: number; y: number }>>(new Map());
+  const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const [initVersion, setInitVersion] = useState(0);
   const hasAutoFitted = useRef(false);
 
   useEffect(() => {
@@ -53,27 +60,29 @@ function useNodePositions(selectedRepo: string | null, nodeCount: number) {
   }, [nodeCount, selectedRepo]);
 
   useEffect(() => {
+    pinnedRef.current = new Map();
+    hasAutoFitted.current = false;
     if (!selectedRepo) {
-      setPositions(new Map());
-      hasAutoFitted.current = false;
+      setInitVersion(v => v + 1);
       return;
     }
     fetch(`/api/positions?repo=${encodeURIComponent(selectedRepo)}`)
       .then(r => r.json())
       .then((data: NodePosition[]) => {
-        setPositions(new Map(data.map(p => [p.nodeId, { x: p.x, y: p.y }])));
+        pinnedRef.current = new Map(data.map(p => [p.nodeId, { x: p.x, y: p.y }]));
+        setInitVersion(v => v + 1);
       })
-      .catch(() => setPositions(new Map()));
-    hasAutoFitted.current = false;
+      .catch(() => setInitVersion(v => v + 1));
   }, [selectedRepo]);
 
-  return { positions, setPositions, hasAutoFitted };
+  return { pinnedRef, initVersion, hasAutoFitted };
 }
 
 function useGraphForces(
   fgRef: React.MutableRefObject<FGRef | undefined>,
   nodeCount: number,
-  hasAutoFitted: React.MutableRefObject<boolean>
+  hasAutoFitted: React.MutableRefObject<boolean>,
+  pinnedRef: React.MutableRefObject<Map<string, { x: number; y: number }>>
 ) {
   useEffect(() => {
     const fg = fgRef.current;
@@ -91,15 +100,19 @@ function useGraphForces(
       fg.zoomToFit(400, 60);
       hasAutoFitted.current = true;
     }
-    // Pin every node so force simulation can't pull them when a single node is dragged
+    // Pin all free nodes and record their positions so forceData can restore them
+    // correctly when a new node is added and forceData rebuilds.
     const nodes = (fg as unknown as FGWithData).graphData().nodes;
     for (const n of nodes) {
       if (n.fx == null) {
         n.fx = n.x;
         n.fy = n.y;
       }
+      if (n.x != null && n.y != null) {
+        pinnedRef.current.set(n.id as string, { x: n.x, y: n.y });
+      }
     }
-  }, [fgRef, nodeCount, hasAutoFitted]);
+  }, [fgRef, nodeCount, hasAutoFitted, pinnedRef]);
 
   return { handleEngineStop };
 }
@@ -155,10 +168,9 @@ function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<
 
   const paintPointerArea = useCallback(
     (node: GraphNode, color: string, ctx: CanvasRenderingContext2D) => {
-      const size = Math.max(5, (node.size ?? 1) * 6) + 6;
+      const size = Math.max(5, (node.size ?? 1) * 6) + 8;
       ctx.fillStyle = color;
       ctx.beginPath();
-      
       const shape = langShape(node.type);
       if (shape === 'square') {
         ctx.rect(node.x! - size / 2, node.y! - size / 2, size, size);
@@ -182,7 +194,7 @@ function useNodeInteraction(
   onNodeClick: (node: GraphNode) => void,
   selectedRepo: string | null,
   fgRef: React.MutableRefObject<FGRef | undefined>,
-  setPositions: React.Dispatch<React.SetStateAction<Map<string, { x: number; y: number }>>>
+  pinnedRef: React.MutableRefObject<Map<string, { x: number; y: number }>>
 ) {
   const shiftRef = useShiftKey();
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
@@ -236,8 +248,10 @@ function useNodeInteraction(
   const handleNodeDragEnd = useCallback((node: SimNode) => {
     isDragging.current = false;
     const nodeId = node.id as string;
+    // Re-pin the dragged node at its dropped position.
     node.fx = node.x;
     node.fy = node.y;
+    pinnedRef.current.set(nodeId, { x: node.x ?? 0, y: node.y ?? 0 });
 
     const movedPositions = new Map<string, { x: number; y: number }>();
     movedPositions.set(nodeId, { x: node.x ?? 0, y: node.y ?? 0 });
@@ -250,17 +264,13 @@ function useNodeInteraction(
         if (n) {
           n.fx = n.x;
           n.fy = n.y;
+          pinnedRef.current.set(id, { x: n.x ?? 0, y: n.y ?? 0 });
           movedPositions.set(id, { x: n.x ?? 0, y: n.y ?? 0 });
         }
       }
     }
 
-    setPositions(prev => {
-      const next = new Map(prev);
-      for (const [id, pos] of movedPositions) next.set(id, pos);
-      return next;
-    });
-
+    // Persist to server without touching React state (no forceData recompute).
     if (selectedRepo) {
       for (const [id, pos] of movedPositions) {
         fetch('/api/positions', {
@@ -270,7 +280,7 @@ function useNodeInteraction(
         }).catch(() => {});
       }
     }
-  }, [selectedNodes, selectedRepo, fgRef, setPositions]);
+  }, [selectedNodes, selectedRepo, fgRef, pinnedRef]);
 
   const handleClearSelection = useCallback(() => setSelectedNodes(new Set()), []);
 
@@ -279,24 +289,41 @@ function useNodeInteraction(
 
 export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRepo }: GraphViewProps) {
   const fgRef = useRef<FGRef | undefined>(undefined);
-  const { positions, setPositions, hasAutoFitted } = useNodePositions(selectedRepo, graphData.nodes.length);
-  const { handleEngineStop } = useGraphForces(fgRef, graphData.nodes.length, hasAutoFitted);
+  const { pinnedRef, initVersion, hasAutoFitted } = useNodePositions(selectedRepo, graphData.nodes.length);
+  const { handleEngineStop } = useGraphForces(fgRef, graphData.nodes.length, hasAutoFitted, pinnedRef);
   const { selectedNodes, handleNodeClick, handleNodeDrag, handleNodeDragEnd, handleClearSelection } =
-    useNodeInteraction(onNodeClick, selectedRepo, fgRef, setPositions);
+    useNodeInteraction(onNodeClick, selectedRepo, fgRef, pinnedRef);
   const { paintNode, paintPointerArea } = useNodePainter(highlightNodeId, selectedNodes);
 
-  const forceData = useMemo(() => ({
-    nodes: graphData.nodes.map(n => {
-      const pos = positions.get(n.id);
-      return pos ? { ...n, fx: pos.x, fy: pos.y } : { ...n };
-    }),
-    links: graphData.edges.map(e => ({
-      source: typeof e.source === 'string' ? e.source : (e.source as GraphNode).id,
-      target: typeof e.target === 'string' ? e.target : (e.target as GraphNode).id,
-      strength: e.strength,
-      type: e.type
-    }))
-  }), [graphData, positions]);
+  // Rebuild forceData only when graphData changes or initial positions finish loading.
+  // Drag-end writes go to pinnedRef directly — no state update, no simulation restart.
+  const forceData = useMemo(() => {
+    const pinned = pinnedRef.current;
+
+    // Compute centroid of pinned nodes so newly added nodes start near the cluster
+    // rather than at the origin where repulsion forces scatter them off-screen.
+    let cx = 0, cy = 0, count = 0;
+    for (const pos of pinned.values()) { cx += pos.x; cy += pos.y; count++; }
+    if (count > 0) { cx /= count; cy /= count; }
+
+    return {
+      nodes: graphData.nodes.map(n => {
+        const pos = pinned.get(n.id);
+        if (pos) return { ...n, fx: pos.x, fy: pos.y };
+        // New node: seed position near centroid so simulation keeps it in frame.
+        if (count > 0) return { ...n, x: cx + (Math.random() - 0.5) * 60, y: cy + (Math.random() - 0.5) * 60 };
+        return { ...n };
+      }),
+      links: graphData.edges.map(e => ({
+        source: typeof e.source === 'string' ? e.source : (e.source as GraphNode).id,
+        target: typeof e.target === 'string' ? e.target : (e.target as GraphNode).id,
+        strength: e.strength,
+        type: e.type
+      }))
+    };
+  // initVersion is the only positions-related trigger; pinnedRef.current is read intentionally.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphData, initVersion]);
 
   const multiSelectCount = selectedNodes.size;
 

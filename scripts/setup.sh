@@ -2,6 +2,29 @@
 set -e
 
 GATE_KEEPER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DAEMON_PID_FILE="$HOME/.gate-keeper/daemon.pid"
+
+# Kill old daemon process if it exists
+if [[ -f "$DAEMON_PID_FILE" ]]; then
+  OLD_PID=$(cat "$DAEMON_PID_FILE")
+  if kill -0 "$OLD_PID" 2>/dev/null; then
+    echo "[gate-keeper] Killing old daemon process (PID: $OLD_PID)..."
+    kill "$OLD_PID" 2>/dev/null || true
+    sleep 1
+  fi
+  rm -f "$DAEMON_PID_FILE"
+fi
+
+# Kill processes on daemon ports if still running
+for port in 5378 5379; do
+  PID=$(lsof -ti:$port 2>/dev/null || true)
+  if [[ -n "$PID" ]]; then
+    echo "[gate-keeper] Killing process on port $port (PID: $PID)..."
+    kill "$PID" 2>/dev/null || true
+  fi
+done
+
+sleep 1
 
 echo "[gate-keeper] Installing dependencies..."
 cd "$GATE_KEEPER_DIR"

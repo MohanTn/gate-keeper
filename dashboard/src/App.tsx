@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { GraphView } from './components/GraphView';
+import { VisGraphView } from './components/VisGraphView';
 import { Sidebar } from './components/Sidebar';
 import { GraphData, GraphNode, GraphEdge, RepoInfo, WSMessage } from './types';
 
@@ -363,7 +363,7 @@ export default function App() {
 
       {/* ── Main area ──────────────────────────────────────── */}
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        <GraphView
+        <VisGraphView
           graphData={graphData}
           onNodeClick={handleNodeSelect}
           highlightNodeId={selectedNode?.id}
