@@ -7,9 +7,12 @@ export interface CSharpAnalysisResult {
   dependencies: Dependency[];
   metrics: Metrics;
   violations: Violation[];
+  definedTypes: string[];
 }
 
 export class CSharpAnalyzer {
+  private dotnetAvailable: boolean | null = null;
+
   analyze(filePath: string): CSharpAnalysisResult {
     // Try Roslyn CLI analyzer first (if dotnet is available)
     if (this.isDotNetAvailable()) {
@@ -23,12 +26,14 @@ export class CSharpAnalyzer {
   }
 
   private isDotNetAvailable(): boolean {
+    if (this.dotnetAvailable !== null) return this.dotnetAvailable;
     try {
       execSync('dotnet --version', { stdio: 'ignore' });
-      return true;
+      this.dotnetAvailable = true;
     } catch {
-      return false;
+      this.dotnetAvailable = false;
     }
+    return this.dotnetAvailable;
   }
 
   private analyzeWithRoslyn(filePath: string): CSharpAnalysisResult {
@@ -50,7 +55,8 @@ export class CSharpAnalyzer {
     return {
       dependencies: this.extractUsings(content, filePath),
       metrics: this.calculateMetrics(content, lines),
-      violations: this.detectViolations(content, lines)
+      violations: this.detectViolations(content, lines),
+      definedTypes: this.extractDefinedTypes(content),
     };
   }
 
@@ -68,7 +74,112 @@ export class CSharpAnalyzer {
       });
     }
 
+    // Extract type references: base classes, interfaces, field types, parameter types, generic args
+    const typeRefs = this.extractTypeReferences(content);
+    for (const typeName of typeRefs) {
+      deps.push({
+        source: filePath,
+        target: `__type__:${typeName}`,
+        type: 'usage',
+        weight: 1
+      });
+    }
+
     return deps;
+  }
+
+  /** Extract class/interface/struct/enum/record names defined in this file */
+  private extractDefinedTypes(content: string): string[] {
+    const types: string[] = [];
+    // Match: [access] [partial] class/interface/struct/enum/record Name<T>
+    const typeDefRegex = /\b(?:public|internal|private|protected)?\s*(?:static\s+)?(?:partial\s+)?(?:abstract\s+)?(?:sealed\s+)?(?:class|interface|struct|enum|record)\s+(\w+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = typeDefRegex.exec(content)) !== null) {
+      types.push(match[1]);
+    }
+    return [...new Set(types)];
+  }
+
+  /** Extract type names referenced (used) in this file — for cross-file edges */
+  private extractTypeReferences(content: string): string[] {
+    const refs = new Set<string>();
+
+    // Strip comments and strings for cleaner matching
+    const cleaned = content
+      .replace(/\/\/.*$/gm, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+      .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+
+    // 1. Inheritance / interface implementation: class Foo : Bar, IBaz
+    const inheritRegex = /\b(?:class|struct|record)\s+\w+(?:<[^>]+>)?\s*:\s*([^{]+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = inheritRegex.exec(cleaned)) !== null) {
+      const bases = match[1].split(',').map(s => s.trim().replace(/<.*>$/, ''));
+      for (const base of bases) {
+        const name = base.split('.').pop()?.replace(/\s+where\s+.*/, '').trim();
+        if (name && /^[A-Z]\w{1,}$/.test(name)) refs.add(name);
+      }
+    }
+
+    // 2. Field / property / variable declarations: TypeName varName
+    const fieldRegex = /\b(?:public|private|protected|internal|static|readonly|virtual|override|abstract|async)\s+(?:static\s+|readonly\s+|virtual\s+|override\s+|abstract\s+|async\s+)*([A-Z]\w+(?:<[^>]+>)?)\s+\w+\s*[{;=,)]/g;
+    while ((match = fieldRegex.exec(cleaned)) !== null) {
+      const typeName = match[1].replace(/<.*>$/, '').trim();
+      if (typeName && /^[A-Z]\w{1,}$/.test(typeName) && !isBuiltinType(typeName)) {
+        refs.add(typeName);
+      }
+      // Also capture generic type args
+      const generics = match[1].match(/<(.+)>/);
+      if (generics) {
+        for (const g of generics[1].split(',')) {
+          const gName = g.trim().replace(/<.*>$/, '');
+          if (/^[A-Z]\w{1,}$/.test(gName) && !isBuiltinType(gName)) refs.add(gName);
+        }
+      }
+    }
+
+    // 3. Method parameters and return types
+    const methodSigRegex = /\b(?:public|private|protected|internal|static|virtual|override|abstract|async)\s+(?:static\s+|virtual\s+|override\s+|abstract\s+|async\s+)*([A-Z]\w+(?:<[^>]+>)?)\s+\w+\s*\(([^)]*)\)/g;
+    while ((match = methodSigRegex.exec(cleaned)) !== null) {
+      // Return type
+      const retType = match[1].replace(/<.*>$/, '').trim();
+      if (/^[A-Z]\w{1,}$/.test(retType) && !isBuiltinType(retType)) refs.add(retType);
+      // Parameter types
+      const params = match[2];
+      if (params) {
+        const paramTypeRegex = /([A-Z]\w+(?:<[^>]+>)?)\s+\w+/g;
+        let pm: RegExpExecArray | null;
+        while ((pm = paramTypeRegex.exec(params)) !== null) {
+          const pType = pm[1].replace(/<.*>$/, '').trim();
+          if (/^[A-Z]\w{1,}$/.test(pType) && !isBuiltinType(pType)) refs.add(pType);
+        }
+      }
+    }
+
+    // 4. new TypeName(...)
+    const newRegex = /new\s+([A-Z]\w+)\s*[(<{]/g;
+    while ((match = newRegex.exec(cleaned)) !== null) {
+      if (!isBuiltinType(match[1])) refs.add(match[1]);
+    }
+
+    // 5. typeof(TypeName), nameof(TypeName), as TypeName, is TypeName
+    const castRegex = /\b(?:typeof|nameof|as|is)\s*\(?\s*([A-Z]\w+)/g;
+    while ((match = castRegex.exec(cleaned)) !== null) {
+      if (!isBuiltinType(match[1])) refs.add(match[1]);
+    }
+
+    // 6. Attribute usage: [AttributeName] or [AttributeName(...)]
+    const attrRegex = /\[\s*([A-Z]\w+)\s*(?:\(|])/g;
+    while ((match = attrRegex.exec(cleaned)) !== null) {
+      if (!isBuiltinType(match[1])) refs.add(match[1]);
+    }
+
+    // Remove types defined in this same file
+    const definedHere = this.extractDefinedTypes(content);
+    for (const d of definedHere) refs.delete(d);
+
+    return [...refs];
   }
 
   private calculateMetrics(content: string, lines: string[]): Metrics {
@@ -202,4 +313,26 @@ export class CSharpAnalyzer {
       });
     }
   }
+}
+
+/** Common C# / .NET built-in type names to exclude from dependency detection */
+function isBuiltinType(name: string): boolean {
+  const builtins = new Set([
+    'String', 'Int32', 'Int64', 'Boolean', 'Byte', 'Char', 'Decimal', 'Double', 'Float',
+    'Single', 'Object', 'Void', 'DateTime', 'DateTimeOffset', 'TimeSpan', 'Guid',
+    'Task', 'ValueTask', 'List', 'Dictionary', 'HashSet', 'IEnumerable', 'IList',
+    'IDictionary', 'ICollection', 'IQueryable', 'ILogger', 'IConfiguration',
+    'CancellationToken', 'Exception', 'ArgumentException', 'ArgumentNullException',
+    'InvalidOperationException', 'NotImplementedException', 'NotSupportedException',
+    'Action', 'Func', 'Predicate', 'EventHandler', 'Nullable', 'Lazy',
+    'Console', 'Math', 'Convert', 'Enumerable', 'StringBuilder', 'Regex',
+    'File', 'Path', 'Directory', 'Stream', 'StreamReader', 'StreamWriter',
+    'HttpClient', 'HttpContext', 'HttpRequest', 'HttpResponse',
+    'JsonSerializer', 'JsonConvert', 'JObject', 'JArray', 'JToken',
+    'IServiceProvider', 'IServiceCollection', 'IHostEnvironment', 'IWebHostEnvironment',
+    'Assert', 'Fact', 'Theory', 'Test', 'TestFixture', 'SetUp', 'TearDown',
+    'Migration', 'MigrationBuilder', 'OperationBuilder', 'ColumnBuilder', 'CreateTableBuilder',
+    'DbContext', 'DbSet', 'ModelBuilder', 'EntityTypeBuilder',
+  ]);
+  return builtins.has(name);
 }

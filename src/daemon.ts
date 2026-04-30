@@ -22,15 +22,45 @@ const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
 const PID_FILE = path.join(GK_DIR, 'daemon.pid');
 const CONFIG_FILE = path.join(GK_DIR, 'config.json');
 
-const DEFAULT_CONFIG: Config = { minRating: 6.5 };
+const DEFAULT_CONFIG: Config = {
+  minRating: 6.5,
+  scanExcludePatterns: {
+    global: [],
+    csharp: [
+      '**/Migrations/*.cs',
+      '**/Migrations/**/*.cs',
+      '*.Designer.cs',
+      '*.g.cs',
+      '*.generated.cs',
+      '**/AssemblyInfo.cs',
+      '**/GlobalUsings.cs',
+    ],
+    typescript: [
+      '*.d.ts',
+      '*.min.js',
+      '*.bundle.js',
+      '**/generated/**',
+    ],
+  },
+};
 
 function loadConfig(): Config {
   try {
     if (fs.existsSync(CONFIG_FILE)) {
       const raw = fs.readFileSync(CONFIG_FILE, 'utf8');
-      return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+      const user = JSON.parse(raw) as Partial<Config>;
+      // Deep-merge scanExcludePatterns: user arrays replace defaults per-key
+      const merged: Config = { ...DEFAULT_CONFIG, ...user };
+      if (user.scanExcludePatterns || DEFAULT_CONFIG.scanExcludePatterns) {
+        merged.scanExcludePatterns = {
+          global: user.scanExcludePatterns?.global ?? DEFAULT_CONFIG.scanExcludePatterns?.global ?? [],
+          csharp: user.scanExcludePatterns?.csharp ?? DEFAULT_CONFIG.scanExcludePatterns?.csharp ?? [],
+          typescript: user.scanExcludePatterns?.typescript ?? DEFAULT_CONFIG.scanExcludePatterns?.typescript ?? [],
+        };
+      }
+      return merged;
     }
-  } catch {}
+  } catch { }
   return { ...DEFAULT_CONFIG };
 }
 
@@ -48,6 +78,9 @@ function findGitRoot(dir: string): string {
 }
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  const noScan = args.includes('--no-scan');
+
   ensurePidFile();
   ensureConfigFile();
 
@@ -57,14 +90,18 @@ async function main(): Promise<void> {
 
   const cache = new SqliteCache();
   const analyzer = new UniversalAnalyzer();
-  const vizServer = new VizServer(cache, analyzer, workDir, repoRoot);
+  const vizServer = new VizServer(cache, analyzer, workDir, repoRoot, config);
 
   await vizServer.start();
 
-  // Initial workspace scan — runs in the background, non-blocking
-  vizServer.scan(false).catch(err => {
-    console.error('[gate-keeper] Initial scan failed:', err);
-  });
+  if (!noScan) {
+    // Initial workspace scan — runs in the background, non-blocking
+    vizServer.scan(false).catch(err => {
+      console.error('[gate-keeper] Initial scan failed:', err);
+    });
+  } else {
+    console.error('[gate-keeper] Started with --no-scan, skipping initial scan');
+  }
 
   // IPC HTTP server — only binds to localhost
   const ipc = express();
@@ -76,7 +113,10 @@ async function main(): Promise<void> {
 
   // Register a new repository from session_create hook
   ipc.post('/repo-register', async (req, res) => {
-    const { action, repo } = req.body as { action: string; repo: any };
+    const { action, repo } = req.body as {
+      action: string;
+      repo: { path?: string; name?: string; sessionId?: string; sessionType?: string; createdAt?: number };
+    };
 
     if (action !== 'register_repo' || !repo?.path) {
       res.status(400).json({ error: 'Invalid request' });
@@ -91,7 +131,7 @@ async function main(): Promise<void> {
         path: repo.path,
         name: repo.name || path.basename(repo.path) || repo.path,
         sessionId: repo.sessionId,
-        sessionType: repo.sessionType || 'unknown',
+        sessionType: (repo.sessionType as RepoMetadata['sessionType']) || 'unknown',
         createdAt: repo.createdAt || Date.now(),
         isActive: true
       };
@@ -100,12 +140,6 @@ async function main(): Promise<void> {
       vizServer.broadcastRepoCreated(metadata);
 
       console.error(`[gate-keeper] Repository ${isNew ? 'registered' : 'updated'}: ${metadata.name} (${metadata.id})`);
-
-      if (isNew) {
-        vizServer.scanRepo(metadata.path).catch(err => {
-          console.error(`[gate-keeper] Initial scan failed for ${metadata.name}: ${err instanceof Error ? err.message : err}`);
-        });
-      }
 
       res.json({ ok: true, repoId, repo: metadata, isNew });
     } catch (err) {
@@ -173,7 +207,7 @@ function ensurePidFile(): void {
 function shutdown(cache: SqliteCache): void {
   try {
     fs.unlinkSync(PID_FILE);
-  } catch {}
+  } catch { }
   cache.close();
   process.exit(0);
 }

@@ -1,7 +1,7 @@
 # ⬡ Gate Keeper
 
 > **Real-time architectural analysis for AI-assisted development.**  
-> Gate Keeper hooks into Claude Code and GitHub Copilot, silently analyzing every file you write and broadcasting live quality metrics to a force-directed dependency graph in your browser.
+> Gate Keeper hooks into Claude Code and GitHub Copilot, silently analyzing every file you write and broadcasting live quality metrics to a force-directed dependency graph in your browser. Its MCP server feeds dependency-graph context directly into AI agents so they understand the architecture *before* they edit.
 
 ---
 
@@ -14,8 +14,9 @@ Every time an AI agent (or you) writes or edits a `.ts`, `.tsx`, `.jsx`, `.js`, 
 3. **Rates** each file on a 0–10 architectural quality scale
 4. **Broadcasts** a live update to a React dashboard over WebSocket
 5. **Auto-opens** the dashboard when your overall codebase rating drops below 5.0
+6. **Feeds graph context** to AI agents via MCP tools — dependencies, reverse dependencies, impact radius, cycles, and trends
 
-The result: you can see your codebase architecture health in real time, alongside the AI writing the code.
+The result: you can see your codebase architecture health in real time, and AI agents can *reason about* it while writing code.
 
 ---
 
@@ -176,6 +177,173 @@ Open **http://localhost:5378/viz** after starting the daemon.
 | `GET /api/status` | Daemon status, overall rating, cycle count |
 | `GET /api/cycles` | All detected circular dependency cycles |
 | `GET /api/trends?file=<path>` | Rating history for a specific file |
+| `GET /api/file-detail?file=<path>&repo=<root>` | Full analysis + rating breakdown + git diff |
+| `GET /api/repos` | All registered repositories |
+
+---
+
+## MCP Server — AI Agent Integration
+
+Gate Keeper exposes an **MCP (Model Context Protocol) server** over stdio that AI agents call during editing sessions. This is what transforms an agent from a file-level linter into an **architecture-aware code quality partner**.
+
+### The Problem: Agents Edit Blind
+
+Without Gate Keeper's graph context, an AI agent editing a file sees **only that file**. It has no idea:
+- How many other files depend on the module it's changing
+- Whether renaming an export will break 12 downstream consumers
+- Whether the file sits at the center of a circular dependency cycle
+- Whether quality has been trending up or down over time
+- Which files in the project are already fragile and at risk
+
+### The Solution: 7 MCP Tools
+
+The MCP server provides **7 tools** organized in two tiers:
+
+#### Tier 1 — File-Level Analysis (existing)
+
+| Tool | Purpose |
+|------|---------|
+| `analyze_file` | Analyze a file on disk → rating, violations, metrics |
+| `analyze_code` | Analyze a code string in-memory → rating, violations |
+| `get_codebase_health` | Scan a directory → overall rating, worst files, common issues |
+| `get_quality_rules` | List all rules, thresholds, and scoring deductions |
+
+#### Tier 2 — Graph Context & Relationships (new)
+
+| Tool | Purpose |
+|------|---------|
+| `get_file_context` | Rich context for one file: dependencies, reverse dependencies (who imports it), circular dependency cycles, rating breakdown, rating trend over time, and git diff |
+| `get_dependency_graph` | Full repository dependency graph: all nodes with ratings, coupling hotspots (most-connected files), worst-rated files, circular dependencies, and complexity hotspots |
+| `get_impact_analysis` | Blast radius of a file change: direct dependents, transitive dependents (BFS), and at-risk files (rating < 6) that may break from upstream changes |
+
+### Agent Workflow
+
+```
+1. get_quality_rules        → Learn scoring system (once per session)
+2. get_dependency_graph     → Understand architecture (once per session)
+3. get_file_context         → Before editing: understand relationships + trends
+4. [edit file]
+5. analyze_file             → Validate quality (mandatory after every edit)
+6. get_file_context         → After editing: verify trend is stable
+7. get_impact_analysis      → If shared module: check downstream blast radius
+```
+
+### Comparison: Without vs With Graph Context
+
+Here's a real example — an agent is asked to **refactor `types.ts`** (a shared type definitions module).
+
+#### Without MCP graph tools — the agent sees:
+
+```
+## types.ts
+Rating: 8.5/10 ✅ PASSED
+
+Violations (1):
+- WARNING [no_test_file]: No corresponding test file found
+
+Metrics:
+- Lines of Code: 136
+- Cyclomatic Complexity: 1
+- Methods/Functions: 0
+- Imports: 0
+```
+
+The agent knows the file's rating and its 1 violation. That's it. It has **zero awareness** of how this file relates to the rest of the codebase.
+
+#### With MCP graph tools — the agent also sees:
+
+**`get_file_context` returns:**
+```
+## File Context: types.ts
+Rating: 8.5/10
+
+Used By (12 files depend on this):
+- viz-server.ts (rating: 5)
+- mcp/server.ts (rating: 5)
+- coverage-analyzer.ts (rating: 5)
+- rating-calculator.ts (rating: 7.5)
+- dependency-graph.ts (rating: 6.5)
+- daemon.ts (rating: 7.5)
+- ... and 6 more
+
+Rating Breakdown:
+- Warnings (1): −0.5
+- Low Test Coverage: −1.0 (0% < 50%)
+Final: 8.5/10
+
+Rating Trend (last 20 analyses):
+10 → 8.5 (📉 declining)
+```
+
+**`get_impact_analysis` returns:**
+```
+## Impact Analysis: types.ts
+Direct dependents: 12 | Total affected (transitive): 12
+
+⚠️ At-Risk Dependents (rating < 6):
+- 5/10 — viz-server.ts (1 violations)
+- 5/10 — mcp/server.ts (1 violations)
+- 5/10 — coverage-analyzer.ts (1 violations)
+```
+
+**`get_dependency_graph` returns:**
+```
+## Dependency Graph
+Files: 25 | Edges: 41 | Overall Rating: 6.6/10
+
+Most Connected Files (coupling hotspots):
+- 12 connections — types.ts (rating: 8.5)   ← #1 most connected
+- 8 connections — universal-analyzer.ts
+- 8 connections — dashboard/types.ts
+```
+
+#### How this changes agent behavior:
+
+| Decision Point | Without Context | With Context |
+|---|---|---|
+| **Should I rename this interface?** | "Rating is 8.5, looks fine — go ahead" | "12 files import this. 3 dependents are already at rating 5. Renaming will break them — use a backward-compatible approach" |
+| **How cautious should I be?** | No signal | "This is the #1 most-connected node in the repo — proceed carefully" |
+| **Is quality improving here?** | No signal | "Declining from 10 → 8.5 — this file needs care, not more churn" |
+| **What to fix next?** | No signal | "3 at-risk dependents at 5/10 — fix those before they fail further" |
+| **Are there circular deps?** | No signal | "0 cycles — safe on that front" |
+
+### VS Code MCP Setup
+
+Add to your VS Code `settings.json` or `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "gate-keeper": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"],
+      "cwd": "/path/to/gate-keeper"
+    }
+  }
+}
+```
+
+### Test the MCP Server
+
+```bash
+# Initialize
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | node dist/mcp/server.js
+
+# List available tools
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' | node dist/mcp/server.js
+
+# Analyze a file
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"analyze_file","arguments":{"file_path":"/path/to/file.ts"}}}' | node dist/mcp/server.js
+
+# Get file context (dependencies, dependents, cycles, trends)
+echo '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_file_context","arguments":{"file_path":"/path/to/file.ts"}}}' | node dist/mcp/server.js
+
+# Get dependency graph for the repo
+echo '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_dependency_graph","arguments":{"repo":"/path/to/repo"}}}' | node dist/mcp/server.js
+
+# Get impact analysis before editing a shared module
+echo '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"get_impact_analysis","arguments":{"file_path":"/path/to/shared/types.ts"}}}' | node dist/mcp/server.js
+```
 
 ---
 
@@ -348,11 +516,15 @@ gate-keeper/
 │   ├── analyzer/
 │   │   ├── universal-analyzer.ts  # Routes to language-specific analyzer
 │   │   ├── typescript-analyzer.ts # TypeScript Compiler API analysis
-│   │   └── csharp-analyzer.ts     # Roslyn CLI / text fallback
+│   │   ├── csharp-analyzer.ts     # Roslyn CLI / text fallback
+│   │   ├── coverage-analyzer.ts   # lcov.info test coverage analysis
+│   │   └── string-analyzer.ts     # In-memory code string analysis
 │   ├── cache/
 │   │   └── sqlite-cache.ts      # SQLite persistence (analyses + rating_history)
 │   ├── graph/
 │   │   └── dependency-graph.ts  # In-memory graph, DFS cycle detection
+│   ├── mcp/
+│   │   └── server.ts            # MCP server — 7 tools for AI agents (stdio JSON-RPC)
 │   ├── rating/
 │   │   └── rating-calculator.ts # 0–10 rating formula
 │   └── viz/
@@ -362,7 +534,10 @@ gate-keeper/
 │       ├── App.tsx              # WebSocket client, state management
 │       ├── components/
 │       │   ├── GraphView.tsx    # react-force-graph-2d canvas renderer
+│       │   ├── DetailPanel.tsx  # File detail: rating breakdown, violations, deps
+│       │   ├── FileListDrawer.tsx # Sortable file list with search
 │       │   ├── Sidebar.tsx      # Metrics panel + violation list
+│       │   ├── ViolationsPanel.tsx # Violation summary panel
 │       │   └── MetricCard.tsx   # Individual metric display card
 │       └── types.ts             # Shared dashboard types
 └── scripts/
@@ -386,6 +561,17 @@ node -e "
 curl http://localhost:5378/api/status
 curl http://localhost:5378/api/hotspots
 curl 'http://localhost:5378/api/trends?file=/path/to/file.ts'
+curl 'http://localhost:5378/api/file-detail?file=/path/to/file.ts&repo=/path/to/repo'
+curl 'http://localhost:5378/api/graph?repo=/path/to/repo'
+curl 'http://localhost:5378/api/cycles?repo=/path/to/repo'
+
+# Test MCP tools (JSON-RPC over stdio)
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_dependency_graph","arguments":{"repo":"/path/to/repo"}}}' \
+  | node dist/mcp/server.js
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_file_context","arguments":{"file_path":"/path/to/file.ts"}}}' \
+  | node dist/mcp/server.js
+echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_impact_analysis","arguments":{"file_path":"/path/to/file.ts"}}}' \
+  | node dist/mcp/server.js
 ```
 
 ---
@@ -404,7 +590,7 @@ curl 'http://localhost:5378/api/trends?file=/path/to/file.ts'
 
 ### SQLite schema
 
-The database at `~/.gate-keeper/cache.db` has four tables:
+The database at `~/.gate-keeper/cache.db` has five tables:
 
 | Table | Contents |
 |-------|---------|
@@ -412,6 +598,7 @@ The database at `~/.gate-keeper/cache.db` has four tables:
 | `rating_history` | Append-only rating log per file — used for trend charts |
 | `repositories` | One row per registered repo — path, name, session ID, overall rating, file count |
 | `node_positions` | Saved x/y positions for each graph node — persists dashboard layout across reloads |
+| `exclude_patterns` | User-defined scan exclusion patterns per repo |
 
 ---
 

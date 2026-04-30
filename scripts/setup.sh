@@ -41,6 +41,22 @@ npm run build
 echo ""
 echo "[gate-keeper] Setup complete!"
 echo ""
+
+# Start daemon in background (no auto-scan — scans are triggered via dashboard or API)
+echo "[gate-keeper] Starting daemon..."
+cd "$GATE_KEEPER_DIR"
+nohup node dist/daemon.js --no-scan > /tmp/gk-daemon.log 2>&1 &
+NEW_PID=$!
+sleep 2
+
+if kill -0 "$NEW_PID" 2>/dev/null; then
+  echo "[gate-keeper] Daemon started (PID: $NEW_PID)"
+  echo "[gate-keeper] Dashboard: http://localhost:5378/viz"
+else
+  echo "[gate-keeper] WARNING: Daemon failed to start. Check /tmp/gk-daemon.log"
+fi
+
+echo ""
 echo "To add gate-keeper hooks globally (fires on all projects):"
 echo "  Run: node $GATE_KEEPER_DIR/dist/hook-receiver.js --install-global"
 echo ""
@@ -51,6 +67,3 @@ echo "      \"matcher\": \"Write|Edit\","
 echo "      \"hooks\": [{\"type\": \"command\", \"command\": \"node $GATE_KEEPER_DIR/dist/hook-receiver.js\"}]"
 echo "    }"
 echo "  ]"
-echo ""
-echo "Start the daemon manually: node $GATE_KEEPER_DIR/dist/daemon.js"
-echo "Dashboard:                 http://localhost:5378/viz"

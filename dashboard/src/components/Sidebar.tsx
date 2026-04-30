@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
+import { ThemeTokens, useTheme } from '../ThemeContext';
+import { RatingBar, LangBadge, SevDot } from './SidebarComponents';
 
 interface SidebarProps {
   graphData: GraphData;
@@ -8,80 +10,22 @@ interface SidebarProps {
   onNodeSelect: (node: GraphNode) => void;
 }
 
-// ── Design tokens ──────────────────────────────────────────
-const T = {
-  panel:       '#111827',
-  panelHover:  '#1a2332',
-  border:      '#1e293b',
-  borderBright:'#2d3f55',
-  text:        '#f1f5f9',
-  textMuted:   '#94a3b8',
-  textFaint:   '#475569',
-  green:       '#22c55e',
-  yellow:      '#eab308',
-  orange:      '#f97316',
-  red:         '#ef4444',
-  accent:      '#3b82f6',
-};
+type SortField = 'rating' | 'label' | 'linesOfCode' | 'violations';
 
-function rc(r: number) {
+function rc(r: number, T: ThemeTokens): string {
   if (r >= 8) return T.green;
   if (r >= 6) return T.yellow;
   if (r >= 4) return T.orange;
   return T.red;
 }
 
-function RatingBar({ rating }: { rating: number }) {
-  const pct = (rating / 10) * 100;
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <div style={{ width: 52, height: 5, background: '#1e293b', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ width: `${pct}%`, height: '100%', background: rc(rating), borderRadius: 3 }} />
-      </div>
-      <span style={{ fontSize: 13, color: rc(rating), fontWeight: 700, minWidth: 26 }}>{rating}</span>
-    </div>
-  );
-}
-
-function LangBadge({ lang }: { lang: string }) {
-  const colors: Record<string, string> = {
-    typescript: '#3b82f6', tsx: '#06b6d4', jsx: '#f59e0b', csharp: '#a78bfa'
-  };
-  const labels: Record<string, string> = {
-    typescript: 'TS', tsx: 'TSX', jsx: 'JSX', csharp: 'C#'
-  };
-  const color = colors[lang] ?? '#64748b';
-  return (
-    <span style={{
-      fontSize: 10,
-      fontWeight: 700,
-      color,
-      border: `1px solid ${color}`,
-      borderRadius: 3,
-      padding: '1px 5px',
-      letterSpacing: 0.5,
-      whiteSpace: 'nowrap' as const
-    }}>
-      {labels[lang] ?? lang.toUpperCase()}
-    </span>
-  );
-}
-
-function SevDot({ severity }: { severity: string }) {
-  const c = severity === 'error' ? T.red : severity === 'warning' ? T.yellow : T.textFaint;
-  return <span style={{ display: 'inline-block', width: 7, height: 7, borderRadius: '50%', background: c, marginRight: 4 }} />;
-}
-
-type SortField = 'rating' | 'label' | 'linesOfCode' | 'violations';
-
-// ── Sub-components extracted to avoid inline handlers ──────
-
-function SortHeaderCell({ field, label, sortField, sortDir, onSort }: {
+function SortHeaderCell({ field, label, sortField, sortDir, onSort, T }: {
   field: SortField | '';
   label: string;
   sortField: SortField;
   sortDir: 'asc' | 'desc';
   onSort: (f: SortField) => void;
+  T: ThemeTokens;
 }) {
   const handleClick = useCallback(() => { if (field) onSort(field as SortField); }, [field, onSort]);
   const arrow = field && sortField === field ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
@@ -103,15 +47,16 @@ function SortHeaderCell({ field, label, sortField, sortDir, onSort }: {
   );
 }
 
-function FileRow({ node, onNodeSelect }: { node: GraphNode; onNodeSelect: (n: GraphNode) => void }) {
+function FileRow({ node, onNodeSelect, T }: { node: GraphNode; onNodeSelect: (n: GraphNode) => void; T: ThemeTokens }) {
   const handleClick = useCallback(() => onNodeSelect(node), [node, onNodeSelect]);
-  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.currentTarget.style.background = T.panelHover;
-  }, []);
-  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.currentTarget.style.background = 'transparent';
-  }, []);
   const errorCount = node.violations.filter(v => v.severity === 'error').length;
+
+  const handleMouseEnter = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = T.panelHover;
+  };
+  const handleMouseLeave = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  };
 
   return (
     <div
@@ -139,7 +84,7 @@ function FileRow({ node, onNodeSelect }: { node: GraphNode; onNodeSelect: (n: Gr
         )}
       </div>
       <div><LangBadge lang={node.type} /></div>
-      <div><RatingBar rating={node.rating} /></div>
+      <div><RatingBar rating={node.rating} T={T} /></div>
       <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'right' as const }}>{node.metrics.linesOfCode}</div>
       <div style={{ fontSize: 13, color: node.violations.length > 0 ? T.yellow : T.textFaint, textAlign: 'right' as const, fontWeight: node.violations.length > 0 ? 600 : 400 }}>
         {node.violations.length}
@@ -148,10 +93,11 @@ function FileRow({ node, onNodeSelect }: { node: GraphNode; onNodeSelect: (n: Gr
   );
 }
 
-function DepLink({ tgt, targetNode, onNodeSelect }: {
+function DepLink({ tgt, targetNode, onNodeSelect, T }: {
   tgt: string;
   targetNode: GraphNode | undefined;
   onNodeSelect: (n: GraphNode) => void;
+  T: ThemeTokens;
 }) {
   const handleClick = useCallback(() => { if (targetNode) onNodeSelect(targetNode); }, [targetNode, onNodeSelect]);
   return (
@@ -166,6 +112,7 @@ function DepLink({ tgt, targetNode, onNodeSelect }: {
 
 // ── Main component ─────────────────────────────────────────
 export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelect }: SidebarProps) {
+  const { T } = useTheme();
   const [state, setState] = useState<{
     fileDetail: FileDetailResponse | null;
     detailLoading: boolean;
@@ -200,6 +147,7 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
       graphData={graphData}
       onBack={onClearSelection}
       onNodeSelect={onNodeSelect}
+      T={T}
     />
   );
 
@@ -213,10 +161,10 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
 
   const sorted = [...graphData.nodes].sort((a, b) => {
     let av: number, bv: number;
-    if (sortField === 'rating')          { av = a.rating; bv = b.rating; }
-    else if (sortField === 'label')      { return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label); }
+    if (sortField === 'rating') { av = a.rating; bv = b.rating; }
+    else if (sortField === 'label') { return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label); }
     else if (sortField === 'linesOfCode') { av = a.metrics.linesOfCode; bv = b.metrics.linesOfCode; }
-    else                                  { av = a.violations.length; bv = b.violations.length; }
+    else { av = a.violations.length; bv = b.violations.length; }
     return sortDir === 'asc' ? av - bv : bv - av;
   });
 
@@ -236,18 +184,21 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
           <SummaryCard
             label="Arch Score"
             value={overallRating !== null ? `${overallRating.toFixed(1)}/10` : '—'}
-            color={overallRating !== null ? rc(overallRating) : T.textFaint}
+            color={overallRating !== null ? rc(overallRating, T) : T.textFaint}
+          T={T}
           />
-          <SummaryCard label="Files" value={graphData.nodes.length} color={T.accent} />
+          <SummaryCard label="Files" value={graphData.nodes.length} color={T.accent} T={T} />
           <SummaryCard
             label="Violations"
             value={totalViolations}
             color={totalViolations > 0 ? T.yellow : T.green}
+            T={T}
           />
           <SummaryCard
             label="Errors"
             value={errors}
             color={errors > 0 ? T.red : T.green}
+            T={T}
           />
         </div>
       </div>
@@ -269,6 +220,7 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
             sortField={sortField}
             sortDir={sortDir}
             onSort={handleSort}
+            T={T}
           />
         ))}
       </div>
@@ -281,7 +233,7 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
             <span style={{ fontSize: 12 }}>Click "Scan All Files" to begin.</span>
           </div>
         ) : sorted.map(node => (
-          <FileRow key={node.id} node={node} onNodeSelect={onNodeSelect} />
+          <FileRow key={node.id} node={node} onNodeSelect={onNodeSelect} T={T} />
         ))}
       </div>
     </div>
@@ -289,7 +241,7 @@ export function Sidebar({ graphData, selectedNode, onClearSelection, onNodeSelec
 }
 
 // ── Summary card (mini) ────────────────────────────────────
-function SummaryCard({ label, value, color }: { label: string; value: number | string; color: string }) {
+function SummaryCard({ label, value, color, T }: { label: string; value: number | string; color: string; T: ThemeTokens }) {
   return (
     <div style={{ background: '#0f172a', borderRadius: 6, padding: '10px 14px', border: `1px solid ${T.border}` }}>
       <div style={{ fontSize: 11, color: T.textFaint, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>
@@ -302,7 +254,7 @@ function SummaryCard({ label, value, color }: { label: string; value: number | s
 
 // ── File detail panel ──────────────────────────────────────
 function FileDetailPanel({
-  node, detail, loading, graphData, onBack, onNodeSelect
+  node, detail, loading, graphData, onBack, onNodeSelect, T
 }: {
   node: GraphNode;
   detail: FileDetailResponse | null;
@@ -310,6 +262,7 @@ function FileDetailPanel({
   graphData: GraphData;
   onBack: () => void;
   onNodeSelect: (n: GraphNode) => void;
+  T: ThemeTokens;
 }) {
   const depCount = graphData.edges.filter(e => {
     const src = typeof e.source === 'string' ? e.source : e.source.id;
@@ -343,15 +296,15 @@ function FileDetailPanel({
         {/* Rating + git diff */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
           <div>
-            <SectionLabel>Rating</SectionLabel>
+            <SectionLabel T={T}>Rating</SectionLabel>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
-              <span style={{ fontSize: 32, fontWeight: 800, color: rc(node.rating) }}>{node.rating}</span>
+              <span style={{ fontSize: 32, fontWeight: 800, color: rc(node.rating, T) }}>{node.rating}</span>
               <span style={{ fontSize: 14, color: T.textFaint }}>/10</span>
             </div>
           </div>
           {detail?.gitDiff ? (
             <div>
-              <SectionLabel>Changes vs HEAD</SectionLabel>
+              <SectionLabel T={T}>Changes vs HEAD</SectionLabel>
               <div style={{ display: 'flex', gap: 10, marginTop: 4, alignItems: 'center' }}>
                 <span style={{ fontSize: 18, fontWeight: 700, color: T.green }}>+{detail.gitDiff.added}</span>
                 <span style={{ fontSize: 18, fontWeight: 700, color: T.red }}>−{detail.gitDiff.removed}</span>
@@ -359,7 +312,7 @@ function FileDetailPanel({
             </div>
           ) : (
             <div>
-              <SectionLabel>Changes vs HEAD</SectionLabel>
+              <SectionLabel T={T}>Changes vs HEAD</SectionLabel>
               <div style={{ fontSize: 13, color: T.textFaint, marginTop: 4 }}>{loading ? 'Loading…' : 'No changes'}</div>
             </div>
           )}
@@ -367,21 +320,21 @@ function FileDetailPanel({
 
         {/* Metrics grid */}
         <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
-          <SectionLabel>Metrics</SectionLabel>
+          <SectionLabel T={T}>Metrics</SectionLabel>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 10 }}>
-            <MetricRow label="Lines of Code" value={node.metrics.linesOfCode} />
-            <MetricRow label="Complexity" value={node.metrics.cyclomaticComplexity} warn={node.metrics.cyclomaticComplexity > 10} />
-            <MetricRow label="Methods" value={node.metrics.numberOfMethods} />
-            <MetricRow label="Imports" value={node.metrics.importCount} warn={node.metrics.importCount > 15} />
-            <MetricRow label="Classes" value={node.metrics.numberOfClasses} />
-            <MetricRow label="Dependencies" value={depCount} />
+            <MetricRow label="Lines of Code" value={node.metrics.linesOfCode} T={T} />
+            <MetricRow label="Complexity" value={node.metrics.cyclomaticComplexity} warn={node.metrics.cyclomaticComplexity > 10} T={T} />
+            <MetricRow label="Methods" value={node.metrics.numberOfMethods} T={T} />
+            <MetricRow label="Imports" value={node.metrics.importCount} warn={node.metrics.importCount > 15} T={T} />
+            <MetricRow label="Classes" value={node.metrics.numberOfClasses} T={T} />
+            <MetricRow label="Dependencies" value={depCount} T={T} />
           </div>
         </div>
 
         {/* Rating breakdown */}
         {detail && (
           <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
-            <SectionLabel>Rating Breakdown</SectionLabel>
+            <SectionLabel T={T}>Rating Breakdown</SectionLabel>
             {detail.ratingBreakdown.length === 0 ? (
               <div style={{ marginTop: 8, fontSize: 13, color: T.green }}>✓ No deductions — clean file</div>
             ) : (
@@ -403,7 +356,7 @@ function FileDetailPanel({
                 ))}
                 <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 8, borderTop: `1px solid ${T.borderBright}` }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Final</span>
-                  <span style={{ fontSize: 14, fontWeight: 800, color: rc(node.rating) }}>{node.rating}</span>
+                  <span style={{ fontSize: 14, fontWeight: 800, color: rc(node.rating, T) }}>{node.rating}</span>
                 </div>
               </div>
             )}
@@ -414,8 +367,8 @@ function FileDetailPanel({
         {node.violations.length > 0 && (
           <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <SectionLabel>Violations ({node.violations.length})</SectionLabel>
-              <CopyViolationsButton node={node} />
+              <SectionLabel T={T}>Violations ({node.violations.length})</SectionLabel>
+              <CopyViolationsButton node={node} T={T} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {node.violations.map((v, i) => (
@@ -426,7 +379,7 @@ function FileDetailPanel({
                   borderRadius: '0 5px 5px 0'
                 }}>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
-                    <SevDot severity={v.severity} />
+                    <SevDot severity={v.severity} T={T} />
                     <span style={{ fontSize: 13, color: T.text, lineHeight: 1.4 }}>{v.message}</span>
                   </div>
                   {v.line && <div style={{ fontSize: 11, color: T.textFaint, marginTop: 3 }}>Line {v.line}</div>}
@@ -440,7 +393,7 @@ function FileDetailPanel({
         {/* Dependencies */}
         {depCount > 0 && (
           <div style={{ paddingTop: 14 }}>
-            <SectionLabel>Imports ({depCount})</SectionLabel>
+            <SectionLabel T={T}>Imports ({depCount})</SectionLabel>
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
               {graphData.edges
                 .filter(e => {
@@ -451,7 +404,7 @@ function FileDetailPanel({
                   const tgt = typeof e.target === 'string' ? e.target : e.target.id;
                   const targetNode = graphData.nodes.find(n => n.id === tgt);
                   return (
-                    <DepLink key={i} tgt={tgt} targetNode={targetNode} onNodeSelect={onNodeSelect} />
+                    <DepLink key={i} tgt={tgt} targetNode={targetNode} onNodeSelect={onNodeSelect} T={T} />
                   );
                 })}
             </div>
@@ -462,7 +415,7 @@ function FileDetailPanel({
   );
 }
 
-function CopyViolationsButton({ node }: { node: GraphNode }) {
+function CopyViolationsButton({ node, T }: { node: GraphNode; T: ThemeTokens }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
@@ -505,7 +458,7 @@ function CopyViolationsButton({ node }: { node: GraphNode }) {
   );
 }
 
-function SectionLabel({ children }: { children: React.ReactNode }) {
+function SectionLabel({ children, T }: { children: React.ReactNode; T: ThemeTokens }) {
   return (
     <div style={{ fontSize: 11, color: T.textFaint, textTransform: 'uppercase', letterSpacing: 1, fontWeight: 600 }}>
       {children}
@@ -513,7 +466,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function MetricRow({ label, value, warn }: { label: string; value: number; warn?: boolean }) {
+function MetricRow({ label, value, warn, T }: { label: string; value: number; warn?: boolean; T: ThemeTokens }) {
   return (
     <div style={{ background: '#0f172a', borderRadius: 5, padding: '8px 12px' }}>
       <div style={{ fontSize: 11, color: T.textFaint, marginBottom: 2 }}>{label}</div>

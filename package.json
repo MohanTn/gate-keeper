@@ -1,7 +1,7 @@
 {
   "name": "gate-keeper",
   "version": "1.0.0",
-  "description": "Zero-friction architectural analysis for Claude Code",
+  "description": "Code quality analysis MCP server for AI-assisted development",
   "main": "dist/daemon.js",
   "scripts": {
     "build": "tsc && echo 'Build complete'",
@@ -9,6 +9,8 @@
     "build:all": "npm run build && npm run build:dashboard",
     "daemon": "node dist/daemon.js",
     "dev": "npx tsx src/daemon.ts",
+    "mcp": "node dist/mcp/server.js",
+    "mcp:dev": "npx tsx src/mcp/server.ts",
     "setup": "bash scripts/setup.sh"
   },
   "dependencies": {

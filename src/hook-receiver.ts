@@ -12,7 +12,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, spawnSync } from 'child_process';
-import { FileAnalysis, HookPayload, SessionCreatePayload } from './types';
+import { Config, FileAnalysis, HookPayload, SessionCreatePayload } from './types';
 
 interface AnalyzeResponse {
   analysis: FileAnalysis | null;
@@ -27,13 +27,51 @@ const DAEMON_SCRIPT = path.join(__dirname, 'daemon.js');
 
 const WATCHED_EXTENSIONS = new Set(['.ts', '.tsx', '.jsx', '.js', '.cs']);
 
+const CONFIG_FILE = path.join(GK_DIR, 'config.json');
+
+/** Convert a simple glob pattern to a RegExp */
+function globToRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '__GLOBSTAR__')
+    .replace(/\*/g, '[^/]*')
+    .replace(/__GLOBSTAR__/g, '.*');
+  return new RegExp(`(?:^|/)${escaped}$`, 'i');
+}
+
+function loadScanExcludePatterns(): Config['scanExcludePatterns'] | undefined {
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+      return raw.scanExcludePatterns;
+    }
+  } catch { }
+  return undefined;
+}
+
+function isFileExcludedByScanConfig(filePath: string, ext: string): boolean {
+  const patterns = loadScanExcludePatterns();
+  if (!patterns) return false;
+  const fileName = filePath.split('/').pop() ?? filePath;
+  const langKey = ext === '.cs' ? 'csharp' : ['.ts', '.tsx', '.jsx', '.js'].includes(ext) ? 'typescript' : null;
+
+  const allPatterns = [
+    ...(patterns.global ?? []),
+    ...(langKey ? (patterns[langKey] ?? []) : []),
+  ];
+  return allPatterns.some(p => {
+    const re = globToRegex(p);
+    return re.test(filePath) || re.test(fileName);
+  });
+}
+
 async function main(): Promise<void> {
   const payload = await readStdin();
   if (!payload) return;
 
   // Handle session_create events (VS Code / GitHub Copilot task)
   if (payload.hook_event_name === 'session_create') {
-    const sessionPayload = payload as any as SessionCreatePayload;
+    const sessionPayload = payload as unknown as SessionCreatePayload;
     await ensureDaemonRunning();
     await registerRepository(sessionPayload);
     return;
@@ -88,6 +126,9 @@ async function main(): Promise<void> {
 
   const ext = path.extname(filePath);
   if (!WATCHED_EXTENSIONS.has(ext)) return;
+
+  // Check scan exclude patterns from config — skip excluded files early
+  if (isFileExcludedByScanConfig(filePath, ext)) return;
 
   await ensureDaemonRunning();
 
@@ -166,7 +207,7 @@ function markSessionRegistered(sessionId: string): void {
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     fs.writeFileSync(path.join(SESSIONS_DIR, sessionId), String(Date.now()));
-  } catch {}
+  } catch { }
 }
 
 function findGitRoot(dir: string): string {
@@ -257,4 +298,4 @@ async function registerRepository(sessionPayload: SessionCreatePayload): Promise
 }
 
 
-main().catch(() => {}).finally(() => process.exit(0));
+main().catch(() => { }).finally(() => process.exit(0));

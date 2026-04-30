@@ -1,616 +1,505 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Network } from 'vis-network/standalone';
 import { DataSet } from 'vis-data/standalone';
 import { GraphData, GraphNode } from '../types';
+import { useTheme } from '../ThemeContext';
+import {
+  healthColor,
+  makeNodeColor,
+  buildVisNodes,
+  buildVisEdges,
+  computeHierarchicalPositions,
+} from './graph-utils';
 
+// ── Props ──────────────────────────────────────────────────
 interface VisGraphViewProps {
   graphData: GraphData;
   onNodeClick: (node: GraphNode) => void;
+  onCanvasClick: () => void;
   highlightNodeId?: string;
   selectedRepo: string | null;
+  focusNodeId?: string | null;
+  fitTrigger?: number;
 }
 
-function ratingColor(rating: number): string {
-  if (rating >= 8) return '#22c55e';
-  if (rating >= 6) return '#eab308';
-  if (rating >= 4) return '#f97316';
-  return '#ef4444';
-}
-
-function langShape(type: string): string {
-  switch (type) {
-    case 'csharp': return 'square';
-    case 'tsx':
-    case 'jsx': return 'triangle';
-    default: return 'circle';
-  }
-}
-
-function layoutNodes(
-  nodes: GraphNode[],
-  pinnedPositions: Map<string, { x: number; y: number }>,
-  graphData: GraphData
-): Array<{ id: string; label: string; x: number; y: number; [key: string]: any }> {
-  if (nodes.length === 0) return [];
-
-  // Get stored positions or compute from centroid + physics simulation
-  const hasStoredPositions = pinnedPositions.size > 0;
-  
-  if (hasStoredPositions) {
-    // Use stored positions but keep them draggable
-    return nodes.map(node => {
-      const pos = pinnedPositions.get(node.id);
-      return {
-        id: node.id,
-        label: node.label,
-        x: pos?.x ?? 0,
-        y: pos?.y ?? 0,
-        title: `${node.label}\nRating: ${node.rating}/10\nLOC: ${node.metrics?.linesOfCode ?? 0}\nViolations: ${(node.violations ?? []).length}`,
-        color: ratingColor(node.rating),
-        shape: langShape(node.type),
-        size: Math.max(20, (node.size ?? 1) * 30),
-        fixed: false,
-        physics: false,
-        mass: 1
-      };
-    });
-  }
-
-  // Compute initial layout with proper 2D distribution
-  const nodeCount = nodes.length;
-  
-  // Calculate spacing based on node count and canvas size
-  const baseSpacing = Math.max(200, Math.sqrt(nodeCount) * 150);
-  
-  return nodes.map((node, idx) => {
-    let x, y;
-    
-    if (nodeCount === 1) {
-      // Single node at center
-      x = 0;
-      y = 0;
-    } else if (nodeCount <= 6) {
-      // Circular layout for small graphs
-      const angle = (idx / nodeCount) * 2 * Math.PI;
-      const radius = baseSpacing * 1.5;
-      x = radius * Math.cos(angle);
-      y = radius * Math.sin(angle);
-    } else if (nodeCount <= 25) {
-      // Spiral layout for medium graphs - creates natural 2D distribution
-      const spiralTightness = 0.8;
-      const angle = idx * spiralTightness;
-      const radius = baseSpacing * Math.sqrt(idx + 1) * 0.5;
-      x = radius * Math.cos(angle);
-      y = radius * Math.sin(angle);
-    } else {
-      // Force-directed random initial positions for large graphs
-      // Use golden ratio for better distribution
-      const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // Golden angle in radians
-      const angle = idx * goldenAngle;
-      const radius = baseSpacing * Math.sqrt(idx + 1) * 0.3;
-      
-      // Add some randomness to break symmetry
-      const randomOffset = (Math.sin(idx * 7.3) + Math.cos(idx * 11.7)) * baseSpacing * 0.2;
-      
-      x = radius * Math.cos(angle) + randomOffset;
-      y = radius * Math.sin(angle) + randomOffset * 0.7; // Slightly less Y variation
-    }
-
-    return {
-      id: node.id,
-      label: node.label,
-      x: x,
-      y: y,
-      title: `${node.label}\nRating: ${node.rating}/10\nLOC: ${node.metrics?.linesOfCode ?? 0}\nViolations: ${(node.violations ?? []).length}`,
-      color: ratingColor(node.rating),
-      shape: langShape(node.type),
-      size: Math.max(20, (node.size ?? 1) * 30),
-      physics: true,
-      mass: Math.max(3, (node.size ?? 1) * 5), // Higher mass for better repulsion
-      fixed: false
-    };
-  });
-}
-
-function layoutEdges(graphData: GraphData): Array<{ from: string; to: string; [key: string]: any }> {
-  return graphData.edges.map(edge => {
-    const from = typeof edge.source === 'string' ? edge.source : edge.source?.id;
-    const to = typeof edge.target === 'string' ? edge.target : edge.target?.id;
-    return {
-      from: from as string,
-      to: to as string,
-      color:
-        edge.type === 'import'
-          ? { color: 'rgba(59,130,246,0.6)', highlight: 'rgba(59,130,246,1)' } // Import: blue
-          : { color: 'rgba(249,115,22,0.6)', highlight: 'rgba(249,115,22,1)' }, // Circular: orange
-      width: Math.max(1.5, (edge.strength ?? 1) * 2.5),
-      arrows: {
-        to: {
-          enabled: true,
-          scaleFactor: 0.5,
-          type: 'arrow'
-        }
-      },
-      smooth: { 
-        type: 'continuous',
-        forceDirection: 'none'
-      },
-      physics: true,
-      font: {
-        size: 10,
-        color: '#64748b',
-        strokeWidth: 0
-      },
-      hoverWidth: 2
-    };
-  });
-}
-
-export function VisGraphView({
-  graphData,
-  onNodeClick,
-  highlightNodeId,
-  selectedRepo
-}: VisGraphViewProps) {
+// ── Custom hook: all vis-network refs + effects ─────────────
+function useVisNetworkSync(params: VisGraphViewProps) {
+  const { T } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | undefined>(undefined);
-  const nodesDataSetRef = useRef<DataSet<any>>(new DataSet());
-  const edgesDataSetRef = useRef<DataSet<any>>(new DataSet());
+  const nodesDS = useRef(new DataSet<Record<string, unknown>>());
+  const edgesDS = useRef(new DataSet<Record<string, unknown>>());
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
-  const shiftRef = useRef(false);
-  const isDraggingRef = useRef(false);
+  const treePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
-  // Load stored positions on mount and when repo changes
+  // Stable refs for callbacks used inside vis-network event handlers
+  const graphDataRef = useRef(params.graphData);
+  graphDataRef.current = params.graphData;
+  const onNodeClickRef = useRef(params.onNodeClick);
+  onNodeClickRef.current = params.onNodeClick;
+  const onCanvasClickRef = useRef(params.onCanvasClick);
+  onCanvasClickRef.current = params.onCanvasClick;
+  const selectedRepoRef = useRef(params.selectedRepo);
+  selectedRepoRef.current = params.selectedRepo;
+
+  // ── Load stored positions ────────────────────────────────
   useEffect(() => {
-    if (!selectedRepo) {
-      pinnedRef.current.clear();
-      return;
-    }
-
-    fetch(`/api/positions?repo=${encodeURIComponent(selectedRepo)}`)
+    if (!params.selectedRepo) { pinnedRef.current.clear(); return; }
+    fetch(`/api/positions?repo=${encodeURIComponent(params.selectedRepo)}`)
       .then(r => r.json())
       .then((data: Array<{ nodeId: string; x: number; y: number }>) => {
         pinnedRef.current = new Map(data.map(p => [p.nodeId, { x: p.x, y: p.y }]));
-        // Refresh the network view
-        if (networkRef.current) {
-          networkRef.current.setData({
-            nodes: nodesDataSetRef.current,
-            edges: edgesDataSetRef.current
-          });
-        }
       })
-      .catch(() => {});
-  }, [selectedRepo]);
+      .catch(() => { });
+  }, [params.selectedRepo]);
 
-  // Track shift key for multi-select
+  // ── Large-graph threshold ─────────────────────────────────
+  const LARGE_GRAPH_THRESHOLD = 200;
+
+  // ── Sync nodes ───────────────────────────────────────────
   useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => { shiftRef.current = e.shiftKey; };
-    const onKeyUp = (e: KeyboardEvent) => { shiftRef.current = e.shiftKey; };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
+    const isLarge = params.graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
+    treePositionsRef.current = isLarge
+      ? new Map()   // skip expensive layout for large graphs
+      : computeHierarchicalPositions(params.graphData.nodes, params.graphData.edges);
+
+    const visNodes = buildVisNodes(params.graphData.nodes, pinnedRef.current, treePositionsRef.current, T);
+    const currentIds = new Set(nodesDS.current.getIds() as string[]);
+    const newIds = new Set(visNodes.map(n => n.id as string));
+
+    // Full rebuild is cheaper than per-node diff for large datasets
+    if (isLarge || currentIds.size === 0) {
+      nodesDS.current.clear();
+      nodesDS.current.add(visNodes);
+    } else {
+      for (const id of currentIds) {
+        if (!newIds.has(id)) { nodesDS.current.remove(id); pinnedRef.current.delete(id); }
+      }
+      for (const vn of visNodes) {
+        const existing = nodesDS.current.get(vn.id as string);
+        if (existing && pinnedRef.current.has(vn.id as string)) {
+          nodesDS.current.update({ ...vn, x: existing.x, y: existing.y });
+        } else {
+          nodesDS.current.update(vn);
+        }
+      }
+    }
+
+    setTimeout(() => {
+      networkRef.current?.fit({
+        animation: { duration: 400, easingFunction: 'easeInOutQuad' },
+        maxZoomLevel: 1.2,
+        minZoomLevel: 0.15,
+      });
+    }, 100);
+  }, [params.graphData.nodes, params.graphData.edges, T]);
+
+  // ── Sync edges ───────────────────────────────────────────
+  useEffect(() => {
+    edgesDS.current.clear();
+    edgesDS.current.add(buildVisEdges(params.graphData, T));
+  }, [params.graphData.edges, T]);
+
+  // External fit trigger when side panels open/close.
+  useEffect(() => {
+    if (!networkRef.current) return;
+    networkRef.current.fit({
+      animation: { duration: 250, easingFunction: 'easeInOutQuad' },
+      maxZoomLevel: 1.2,
+      minZoomLevel: 0.15,
+    });
+  }, [params.fitTrigger]);
+
+  // ── Focus on a node (from search or file list) ──────────
+  useEffect(() => {
+    if (!networkRef.current || !params.focusNodeId) return;
+    networkRef.current.selectNodes([params.focusNodeId], false);
+    networkRef.current.focus(params.focusNodeId, {
+      scale: 0.9,
+      animation: { duration: 400, easingFunction: 'easeInOutQuad' },
+    });
+  }, [params.focusNodeId]);
+
+  // ── Highlight selected node border ──────────────────────
+  useEffect(() => {
+    if (!params.highlightNodeId) return;
+    const gn = params.graphData.nodes.find(n => n.id === params.highlightNodeId);
+    if (gn) {
+      nodesDS.current.update({
+        id: params.highlightNodeId,
+        color: {
+          background: T.cardBgHover, border: T.accent,
+          highlight: { background: T.cardBgHover, border: T.accent },
+          hover: { background: T.cardBgHover, border: T.accent }
+        },
+        borderWidth: 3,
+      });
+    }
     return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, []);
-
-  // Update nodes data when graphData changes - only update changed/new nodes, preserve dragged positions
-  useEffect(() => {
-    const visNodes = layoutNodes(graphData.nodes, pinnedRef.current, graphData);
-    const currentIds = new Set(nodesDataSetRef.current.getIds());
-    const newIds = new Set(visNodes.map(n => n.id));
-
-    // Remove deleted nodes
-    for (const id of currentIds) {
-      if (!newIds.has(id as string)) {
-        nodesDataSetRef.current.remove(id);
-        pinnedRef.current.delete(id as string);
-      }
-    }
-
-    // Update or add nodes - preserve positions for moved nodes
-    const updates: any[] = [];
-    const toAdd: any[] = [];
-    
-    for (const visNode of visNodes) {
-      const existing = nodesDataSetRef.current.get(visNode.id);
-      if (existing) {
-        // Preserve the node's current position if it was dragged
-        updates.push({
-          ...visNode,
-          x: existing.x,
-          y: existing.y,
-          physics: false // Keep physics disabled once positioned
+      if (gn) {
+        nodesDS.current.update({
+          id: params.highlightNodeId,
+          color: makeNodeColor(healthColor(gn.rating, T)),
+          borderWidth: 2,
         });
-      } else {
-        toAdd.push(visNode);
       }
-    }
+    };
+  }, [params.highlightNodeId, params.graphData.nodes]);
 
-    if (updates.length > 0) {
-      nodesDataSetRef.current.update(updates);
-    }
-    if (toAdd.length > 0) {
-      nodesDataSetRef.current.add(toAdd);
-    }
-  }, [graphData.nodes]);
-
-  // Update edges data when graphData changes - only update changed edges
-  useEffect(() => {
-    const visEdges = layoutEdges(graphData);
-    const currentIds = new Set(edgesDataSetRef.current.getIds());
-    const newIds = new Set(visEdges.map((e, i) => i.toString()));
-
-    // Clear and rebuild edges (edges are less stable to preserve incrementally)
-    edgesDataSetRef.current.clear();
-    edgesDataSetRef.current.add(visEdges);
-  }, [graphData.edges]);
-
-  // Initialize network once
+  // ── Initialize network (once) ───────────────────────────
   useEffect(() => {
     if (!containerRef.current || networkRef.current) return;
 
-    const options = {
-      physics: {
-        enabled: true,
-        solver: 'barnesHut',
-        barnesHut: {
-          gravitationalConstant: -80000, // Strong repulsion to prevent overlap
-          centralGravity: 0.1, // Small center pull to keep graph together
-          springLength: 300, // Desired edge length
-          springConstant: 0.04, // Edge spring strength
-          damping: 0.09, // Damping for stability
-          avoidOverlap: 1 // Maximum overlap avoidance
-        },
-        stabilization: {
-          iterations: 500,
-          updateInterval: 50,
-          onlyDynamicEdges: false,
-          fit: true
-        },
-        timestep: 0.5,
-        adaptiveTimestep: true,
-        maxVelocity: 30,
-        minVelocity: 0.75
-      },
+    const network = new Network(containerRef.current, {
+      nodes: nodesDS.current,
+      edges: edgesDS.current,
+    }, {
+      physics: { enabled: false },
       interaction: {
         hover: true,
-        navigationButtons: true,
+        tooltipDelay: 200,
+        navigationButtons: false,
         zoomView: true,
         dragView: true,
-        multiselect: true,
-        keyboard: {
-          enabled: true,
-          speed: { x: 10, y: 10, zoom: 0.02 }
-        }
+        multiselect: false,
       },
+      layout: { improvedLayout: false },
       nodes: {
+        shape: 'box',
         font: {
           size: 14,
-          face: 'ui-monospace, "SF Mono", monospace',
-          color: '#cbd5e1'
+          face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif',
+          color: T.text,
+          multi: false,
         },
         borderWidth: 2,
         borderWidthSelected: 3,
-        margin: {
-          top: 15,
-          right: 15,
-          bottom: 15,
-          left: 15
-        },
-        widthConstraint: {
-          maximum: 120
-        },
-        shapeProperties: {
-          interpolation: true
-        },
-        scaling: {
-          min: 20,
-          max: 80,
-          label: { enabled: true, min: 12, max: 18 }
-        }
+        margin: { top: 12, right: 16, bottom: 12, left: 16 },
+        shapeProperties: { borderRadius: 8 },
+        widthConstraint: { minimum: 100, maximum: 180 },
+        chosen: true,
       },
       edges: {
-        smooth: {
-          enabled: true,
-          type: 'continuous' as const,
-          forceDirection: 'none',
-          roundness: 0.5
-        },
-        font: {
-          size: 10,
-          color: '#64748b',
-          face: 'ui-monospace, "SF Mono", monospace'
-        },
-        hoverWidth: 2,
-        selectionWidth: 3
+        smooth: { enabled: true, type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
+        arrows: { to: { enabled: true, scaleFactor: 0.4, type: 'arrow' } },
+        hoverWidth: 1.5,
+        selectionWidth: 2,
       },
-      groups: {
-        useDefaultGroups: false
-      }
-    };
-
-    const network = new Network(
-      containerRef.current,
-      {
-        nodes: nodesDataSetRef.current,
-        edges: edgesDataSetRef.current
-      },
-      options
-    );
+    });
 
     networkRef.current = network;
 
-    // Handle node clicks
-    network.on('click', (params: any) => {
-      if (params.nodes.length > 0) {
-        const nodeId = params.nodes[0] as string;
-        const node = nodesDataSetRef.current.get(nodeId) as any;
+    // ── HOVER HIGHLIGHTING ─────────────────────────────────
+    let lastHoverUpdatedIds: string[] = [];
+    let lastHoverEdgeIds: string[] = [];
 
-        if (shiftRef.current) {
-          setSelectedNodes(prev => {
-            const next = new Set(prev);
-            if (next.has(nodeId)) next.delete(nodeId);
-            else next.add(nodeId);
-            return next;
-          });
-        } else {
-          setSelectedNodes(new Set([nodeId]));
-          // Find the original GraphNode and pass it to callback
-          const graphNode = graphData.nodes.find(n => n.id === nodeId);
-          if (graphNode) {
-            onNodeClick(graphNode);
-          }
-        }
+    network.on('hoverNode', (hoverParams: { node: string }) => {
+      const nodeId = hoverParams.node;
+      const isLargeGraph = graphDataRef.current.nodes.length > 200;
+      const connectedNodeIds = network.getConnectedNodes(nodeId) as string[];
+      const connectedEdgeIds = network.getConnectedEdges(nodeId) as string[];
 
-        // Highlight selected nodes
-        const highlightedNodes = new Set(selectedNodes);
-        if (shiftRef.current) {
-          if (highlightedNodes.has(nodeId)) {
-            highlightedNodes.delete(nodeId);
-          } else {
-            highlightedNodes.add(nodeId);
-          }
-        } else {
-          highlightedNodes.clear();
-          highlightedNodes.add(nodeId);
-        }
-
-        // Update node colors based on selection
-        const updates = Array.from(nodesDataSetRef.current.getIds()).map(id => {
-          const nodeIdStr = id as string;
-          const node = nodesDataSetRef.current.get(nodeIdStr) as any;
-          const graphNode = graphData.nodes.find(n => n.id === nodeIdStr);
+      if (isLargeGraph) {
+        // Large graph: only highlight connected nodes, don't dim the rest
+        const touchedIds = [nodeId, ...connectedNodeIds];
+        const nodeUpdates = touchedIds.map(id => {
+          const gn = graphDataRef.current.nodes.find(g => g.id === id);
+          const baseColor = healthColor(gn?.rating ?? 5, T);
           return {
-            ...node,
-            color: highlightedNodes.has(nodeIdStr) ? { background: '#fff', border: '#3b82f6' } : ratingColor(graphNode?.rating ?? 0),
-            borderWidth: highlightedNodes.has(nodeIdStr) ? 3 : 2
+            id,
+            color: {
+              background: id === nodeId ? T.cardBgHover : T.cardBg,
+              border: id === nodeId ? T.accent : baseColor,
+              highlight: { background: T.cardBgHover, border: T.accent },
+              hover: { background: T.cardBgHover, border: baseColor },
+            },
+            borderWidth: id === nodeId ? 3 : 2,
           };
         });
-        nodesDataSetRef.current.update(updates);
+        nodesDS.current.update(nodeUpdates);
+
+        const edgeUpdates = connectedEdgeIds.map(id => {
+          const e = edgesDS.current.get(id);
+          const isCirc = e?._isCircular;
+          return {
+            id,
+            color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
+            width: 2.5,
+          };
+        });
+        edgesDS.current.update(edgeUpdates);
+
+        lastHoverUpdatedIds = touchedIds;
+        lastHoverEdgeIds = connectedEdgeIds;
       } else {
-        setSelectedNodes(new Set());
-        // Clear selection highlight
-        const updates = Array.from(nodesDataSetRef.current.getIds()).map(id => {
-          const nodeIdStr = id as string;
-          const node = nodesDataSetRef.current.get(nodeIdStr) as any;
-          const graphNode = graphData.nodes.find(n => n.id === nodeIdStr);
+        // Small graph: full dim-all / highlight-connected pattern
+        const connectedSet = new Set(connectedNodeIds);
+        connectedSet.add(nodeId);
+        const connectedEdgeSet = new Set(connectedEdgeIds);
+
+        const allNodeIds = nodesDS.current.getIds() as string[];
+        const nodeUpdates = allNodeIds.map(id => {
+          const gn = graphDataRef.current.nodes.find(g => g.id === id);
+          const baseColor = healthColor(gn?.rating ?? 5, T);
+          if (connectedSet.has(id)) {
+            return {
+              id,
+              color: {
+                background: id === nodeId ? T.cardBgHover : T.cardBg,
+                border: id === nodeId ? T.accent : baseColor,
+                highlight: { background: T.cardBgHover, border: T.accent },
+                hover: { background: T.cardBgHover, border: baseColor },
+              },
+              font: { color: T.text, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
+              borderWidth: id === nodeId ? 3 : 2,
+            };
+          }
           return {
-            ...node,
-            color: ratingColor(graphNode?.rating ?? 0),
-            borderWidth: 2
+            id,
+            color: {
+              background: T.elevated,
+              border: T.border,
+              highlight: { background: T.cardBgHover, border: T.accent },
+              hover: { background: T.cardBgHover, border: T.borderBright },
+            },
+            font: { color: T.textFaint, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
+            borderWidth: 1,
           };
         });
-        nodesDataSetRef.current.update(updates);
-      }
-    });
+        nodesDS.current.update(nodeUpdates);
 
-    // Handle drag end to save positions and ensure they stay in place
-    network.on('dragEnd', (params: any) => {
-      if (params.nodes.length > 0) {
-        const draggedNodeIds = params.nodes; // Can be multiple with multi-select
-        
-        // Collect all nodes to update (dragged + multi-selected)
-        const nodesToUpdate = new Set(draggedNodeIds);
-        if (selectedNodes.size > 0) {
-          selectedNodes.forEach(id => nodesToUpdate.add(id));
-        }
-
-        // Save positions for all dragged/selected nodes
-        const positionsToSave: Array<{ nodeId: string; x: number; y: number }> = [];
-        const updates: any[] = [];
-        
-        for (const nodeId of nodesToUpdate) {
-          const node = nodesDataSetRef.current.get(nodeId as string) as any;
-          if (node) {
-            const pos = { x: node.x, y: node.y };
-            pinnedRef.current.set(nodeId as string, pos);
-            positionsToSave.push({ nodeId: nodeId as string, ...pos });
-            
-            // Update node to ensure physics is disabled and position is locked
-            updates.push({
-              ...node,
-              x: node.x,
-              y: node.y,
-              fixed: false, // Keep draggable for next interaction
-              physics: false // Prevent any physics movement
-            });
+        const allEdgeIds = edgesDS.current.getIds() as string[];
+        const edgeUpdates = allEdgeIds.map(id => {
+          if (connectedEdgeSet.has(id)) {
+            const e = edgesDS.current.get(id);
+            const isCirc = e?._isCircular;
+            return {
+              id,
+              color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
+              width: 2.5,
+            };
           }
-        }
+          return {
+            id,
+            color: { color: T.edgeDim, highlight: T.edgeDim },
+            width: 0.5,
+          };
+        });
+        edgesDS.current.update(edgeUpdates);
+        lastHoverUpdatedIds = allNodeIds;
+        lastHoverEdgeIds = allEdgeIds;
+      }
+    });
 
-        if (updates.length > 0) {
-          nodesDataSetRef.current.update(updates);
-        }
+    network.on('blurNode', () => {
+      restoreStyles();
+    });
 
-        // Persist all positions to server
-        if (selectedRepo && positionsToSave.length > 0) {
-          Promise.all(
-            positionsToSave.map(({ nodeId, x, y }) =>
-              fetch('/api/positions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  repo: selectedRepo,
-                  nodeId,
-                  x,
-                  y
-                })
-              }).catch(() => {})
-            )
-          );
+    function restoreStyles() {
+      const isLargeGraph = graphDataRef.current.nodes.length > 200;
+
+      if (isLargeGraph && lastHoverUpdatedIds.length > 0) {
+        // Only restore nodes/edges that were actually changed
+        const nodeUpdates = lastHoverUpdatedIds.map(id => {
+          const gn = graphDataRef.current.nodes.find(g => g.id === id);
+          const color = healthColor(gn?.rating ?? 5, T);
+          return { id, color: makeNodeColor(color), borderWidth: 2 };
+        });
+        nodesDS.current.update(nodeUpdates);
+
+        const edgeUpdates = lastHoverEdgeIds.map(id => {
+          const e = edgesDS.current.get(id);
+          const isCirc = e?._isCircular;
+          return {
+            id,
+            color: {
+              color: isCirc ? T.edgeCircular : T.edgeDefault,
+              highlight: isCirc ? 'rgba(249,115,22,1)' : T.edgeHighlight,
+            },
+            width: isCirc ? 2.5 : 2,
+          };
+        });
+        edgesDS.current.update(edgeUpdates);
+        lastHoverUpdatedIds = [];
+        lastHoverEdgeIds = [];
+      } else {
+        // Small graph: full restore
+        const allNodeIds = nodesDS.current.getIds() as string[];
+        const nodeUpdates = allNodeIds.map(id => {
+          const gn = graphDataRef.current.nodes.find(g => g.id === id);
+          const color = healthColor(gn?.rating ?? 5, T);
+          return {
+            id,
+            color: makeNodeColor(color),
+            font: { color: T.text, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
+            borderWidth: 2,
+          };
+        });
+        nodesDS.current.update(nodeUpdates);
+
+        edgesDS.current.clear();
+        edgesDS.current.add(buildVisEdges(graphDataRef.current, T));
+      }
+    }
+
+    network.on('click', (clickParams: { nodes: string[] }) => {
+      if (clickParams.nodes.length > 0) {
+        const nodeId = clickParams.nodes[0];
+        const gn = graphDataRef.current.nodes.find(n => n.id === nodeId);
+        if (gn) onNodeClickRef.current(gn);
+      } else {
+        onCanvasClickRef.current();
+      }
+    });
+
+    network.on('dragEnd', (dragParams: { nodes: string[] }) => {
+      for (const nodeId of dragParams.nodes) {
+        const node = nodesDS.current.get(nodeId);
+        if (!node) continue;
+        const pos = { x: node.x as number, y: node.y as number };
+        pinnedRef.current.set(nodeId, pos);
+        nodesDS.current.update({ id: nodeId, physics: false });
+
+        if (selectedRepoRef.current) {
+          fetch('/api/positions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo: selectedRepoRef.current, nodeId, ...pos }),
+          }).catch(() => { });
         }
       }
     });
 
-    // Fit to view after stabilization completes (not before)
-    let fitTimer: NodeJS.Timeout;
-    
-    const fitToView = () => {
-      if (networkRef.current) {
-        try {
-          networkRef.current.fit({ 
-            animation: { duration: 500, easingFunction: 'easeInOutQuad' },
-            maxZoomLevel: 1 // Don't zoom in too much
-          });
-        } catch (e) {}
-      }
-    };
-
-    // Initial fit after a delay to let physics settle
-    fitTimer = setTimeout(fitToView, 100);
-
-    // Disable physics after stabilization but keep nodes draggable
-    network.once('stabilizationIterationsDone', () => {
-      // Disable physics to maintain stable layout
-      network.setOptions({ physics: false });
-      
-      // Save final positions and lock them to prevent any further automatic movement
-      const nodes = nodesDataSetRef.current.getIds() as string[];
-      const updates = nodes.map(id => {
-        const node = nodesDataSetRef.current.get(id) as any;
-        const pos = { x: node.x, y: node.y };
-        pinnedRef.current.set(id, pos);
-        
-        return {
-          ...node,
-          x: pos.x,
-          y: pos.y,
-          fixed: false, // Allow dragging
-          physics: false // No physics movement
-        };
-      });
-      nodesDataSetRef.current.update(updates);
-      
-      // Fit to view after stabilization to show final layout
-      setTimeout(() => fitToView(), 100);
-    });
+    const fitTimer = setTimeout(() => {
+      try {
+        networkRef.current?.fit({
+          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+          maxZoomLevel: 1.2,
+          minZoomLevel: 0.15,
+        });
+      } catch { }
+    }, 200);
 
     return () => {
-      if (fitTimer) clearTimeout(fitTimer);
+      clearTimeout(fitTimer);
       network.destroy();
       networkRef.current = undefined;
     };
   }, []);
 
+  function handleZoomIn() {
+    const net = networkRef.current; if (!net) return;
+    const s = net.getScale(); const p = net.getViewPosition();
+    net.moveTo({ position: p, scale: s * 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+  }
+  function handleZoomOut() {
+    const net = networkRef.current; if (!net) return;
+    const s = net.getScale(); const p = net.getViewPosition();
+    net.moveTo({ position: p, scale: s * 0.77, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+  }
+  function handleFitView() {
+    networkRef.current?.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' }, maxZoomLevel: 1 });
+  }
+
+  return { containerRef, handleZoomIn, handleZoomOut, handleFitView };
+}
+
+// ── Component ──────────────────────────────────────────────
+
+export function VisGraphView({
+  graphData,
+  onNodeClick,
+  onCanvasClick,
+  highlightNodeId,
+  selectedRepo,
+  focusNodeId,
+  fitTrigger,
+}: VisGraphViewProps) {
+  const { T } = useTheme();
+  const { containerRef, handleZoomIn, handleZoomOut, handleFitView } = useVisNetworkSync({
+    graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger,
+  });
+
   return (
-    <div style={{ flex: 1, position: 'relative', background: '#0a0f1e', overflow: 'hidden' }}>
+    <div style={{ flex: 1, position: 'relative', background: T.bg, overflow: 'hidden' }}>
+      {/* Empty state */}
       {graphData.nodes.length === 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            inset: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 12,
-            color: '#1e293b',
-            pointerEvents: 'none',
-            zIndex: 1
-          }}
-        >
-          <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-            <path
-              d="M32 4L58 18V46L32 60L6 46V18L32 4Z"
-              stroke="#1e293b"
-              strokeWidth="2"
-              fill="none"
-            />
-            <path
-              d="M32 20L44 27V41L32 48L20 41V27L32 20Z"
-              stroke="#263347"
-              strokeWidth="1.5"
-              fill="none"
-            />
-          </svg>
-          <div style={{ fontSize: 16, color: '#334155', fontWeight: 600 }}>No files analyzed</div>
-          <div style={{ fontSize: 13, color: '#1e293b' }}>Click "Scan All Files" to analyze your workspace</div>
+        <div style={{
+          position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 16,
+          pointerEvents: 'none', zIndex: 1,
+        }}>
+          <div style={{
+            width: 64, height: 64, borderRadius: 16, border: `2px dashed ${T.border}`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <span style={{ fontSize: 28, opacity: 0.3 }}>⬡</span>
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: T.textMuted }}>No files analyzed</div>
+          <div style={{ fontSize: 13, color: T.textFaint }}>Scan your workspace to build the dependency map</div>
         </div>
       )}
 
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* Legend */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 16,
-          left: 16,
-          background: 'rgba(17,24,39,0.9)',
-          border: '1px solid #1e293b',
-          borderRadius: 8,
-          padding: '10px 14px',
-          fontSize: 12,
-          color: '#64748b',
-          backdropFilter: 'blur(4px)',
-          zIndex: 10
-        }}
-      >
-        <div
-          style={{
-            fontWeight: 600,
-            marginBottom: 8,
-            color: '#94a3b8',
-            fontSize: 11,
-            textTransform: 'uppercase',
-            letterSpacing: 0.8
-          }}
-        >
-          Legend
-        </div>
-        <div style={{ marginBottom: 3 }}>● TypeScript / JS</div>
-        <div style={{ marginBottom: 3 }}>■ C#</div>
-        <div style={{ marginBottom: 8 }}>▲ React (TSX / JSX)</div>
-        <div style={{ display: 'flex', gap: 10, borderTop: '1px solid #1e293b', paddingTop: 8 }}>
-          <span style={{ color: '#22c55e' }}>■</span>
-          <span>≥ 8</span>
-          <span style={{ color: '#eab308' }}>■</span>
-          <span>≥ 6</span>
-          <span style={{ color: '#f97316' }}>■</span>
-          <span>≥ 4</span>
-          <span style={{ color: '#ef4444' }}>■</span>
-          <span>&lt; 4</span>
+      {/* Compact legend — health colors only */}
+      <div style={{
+        position: 'absolute', bottom: 16, left: 16,
+        background: T.panel, backdropFilter: 'blur(8px)',
+        border: `1px solid ${T.border}`, borderRadius: 8,
+        padding: '8px 14px', fontSize: 11, color: T.textMuted, zIndex: 10,
+      }}>
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+          <span><span style={{ color: T.green, fontWeight: 700 }}>━</span> Healthy ≥8</span>
+          <span><span style={{ color: T.yellow, fontWeight: 700 }}>━</span> Warning ≥6</span>
+          <span><span style={{ color: T.orange, fontWeight: 700 }}>━</span> Degraded ≥4</span>
+          <span><span style={{ color: T.red, fontWeight: 700 }}>━</span> Critical &lt;4</span>
         </div>
       </div>
 
-      {/* Interaction hints */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 16,
-          right: 16,
-          fontSize: 11,
-          color: '#1e293b',
-          pointerEvents: 'none',
-          textAlign: 'right',
-          lineHeight: 1.8,
-          zIndex: 10
-        }}
-      >
-        <div>Drag to pan • Scroll to zoom</div>
-        <div>Click node to inspect • Shift+click to multi-select</div>
+      {/* Zoom controls */}
+      <div style={{
+        position: 'absolute', bottom: 16, right: 16,
+        display: 'flex', flexDirection: 'column', gap: 4, zIndex: 10,
+      }}>
+        <ZoomBtn label="+" onClick={handleZoomIn} T={T} />
+        <ZoomBtn label="−" onClick={handleZoomOut} T={T} />
+        <ZoomBtn label="⊡" onClick={handleFitView} T={T} />
+      </div>
+
+      {/* Interaction hint */}
+      <div style={{
+        position: 'absolute', bottom: 52, right: 16, fontSize: 10, color: T.textFaint,
+        pointerEvents: 'none', textAlign: 'right', lineHeight: 1.8, zIndex: 10,
+      }}>
+        Hover to highlight · Click to inspect · Drag to rearrange
       </div>
     </div>
+  );
+}
+
+function ZoomBtn({ label, onClick, T }: { label: string; onClick: () => void; T: ReturnType<typeof useTheme>['T'] }) {
+  function handleMouseEnter(e: React.MouseEvent<HTMLButtonElement>) {
+    e.currentTarget.style.background = T.cardBgHover;
+    e.currentTarget.style.borderColor = T.borderBright;
+  }
+  function handleMouseLeave(e: React.MouseEvent<HTMLButtonElement>) {
+    e.currentTarget.style.background = T.panelHover;
+    e.currentTarget.style.borderColor = T.border;
+  }
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: T.panel, border: `1px solid ${T.border}`,
+        borderRadius: 6, color: T.textMuted, cursor: 'pointer', fontSize: 16,
+        backdropFilter: 'blur(8px)',
+      }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {label}
+    </button>
   );
 }

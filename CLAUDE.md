@@ -23,6 +23,15 @@ npm run daemon                    # node dist/daemon.js
 # Run daemon in dev mode (no build step needed)
 npm run dev                       # npx tsx src/daemon.ts
 
+# Run the MCP server (after building)
+npm run mcp                       # node dist/mcp/server.js
+
+# Run the MCP server in dev mode
+npm run mcp:dev                   # npx tsx src/mcp/server.ts
+
+# Test the MCP server (send JSON-RPC initialize)
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | node dist/mcp/server.js
+
 # Test the hook receiver manually
 echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/file.ts"}}' | node dist/hook-receiver.js
 
@@ -76,3 +85,43 @@ Each file write triggers: `UniversalAnalyzer` → language dispatch → `TypeScr
 | `~/.gate-keeper/cache.db` | SQLite analysis cache |
 | `~/.gate-keeper/daemon.pid` | PID file — hook-receiver uses this to check daemon liveness |
 | `dashboard/dist/` | Built dashboard, served at `/viz/` |
+
+### MCP Server (`src/mcp/server.ts`)
+
+Exposes Gate Keeper as an MCP (Model Context Protocol) server over stdio. AI agents (GitHub Copilot, Claude, etc.) call these tools during editing to get real-time quality feedback and self-correct.
+
+**Tools:**
+
+| Tool | Purpose |
+|---|---|
+| `analyze_file` | Analyze a file on disk → rating, violations, metrics |
+| `analyze_code` | Analyze a code string in-memory → rating, violations |
+| `get_codebase_health` | Scan a directory → overall rating, worst files, common issues |
+| `get_quality_rules` | List all rules, thresholds, and scoring deductions |
+
+**Agent workflow:**
+1. Agent edits a file
+2. Agent calls `analyze_file` on the edited file
+3. Gate Keeper returns rating + violations
+4. If rating < threshold → agent fixes violations and re-analyzes
+5. Repeat until rating ≥ threshold
+
+**Key files:**
+- `src/mcp/server.ts` — MCP server, JSON-RPC over stdio, tool handlers
+- `src/analyzer/string-analyzer.ts` — In-memory AST analysis (no disk I/O)
+- `src/analyzer/universal-analyzer.ts` — File-based analysis dispatcher
+
+**VS Code setup (`.vscode/mcp.json`):**
+```json
+{
+  "servers": {
+    "gate-keeper": {
+      "command": "node",
+      "args": ["dist/mcp/server.js"],
+      "cwd": "/path/to/gate-keeper"
+    }
+  }
+}
+```
+
+**Configuration:** Edit `~/.gate-keeper/config.json` to change `minRating` (default 6.5).

@@ -3,6 +3,19 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { FileAnalysis, RepoMetadata } from '../types';
 
+interface RepoRow {
+  id: string;
+  path: string;
+  name: string;
+  session_id: string | null;
+  session_type: string;
+  created_at: number;
+  last_analyzed: number | null;
+  file_count: number;
+  overall_rating: number;
+  is_active: number;
+}
+
 const DB_PATH = path.join(
   process.env.HOME ?? '/tmp',
   '.gate-keeper',
@@ -73,6 +86,14 @@ export class SqliteCache {
       CREATE INDEX IF NOT EXISTS idx_rh_time       ON rating_history(recorded_at);
       CREATE INDEX IF NOT EXISTS idx_repos_session ON repositories(session_id);
       CREATE INDEX IF NOT EXISTS idx_repos_active  ON repositories(is_active);
+
+      CREATE TABLE IF NOT EXISTS exclude_patterns (
+        id      INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo    TEXT    NOT NULL,
+        pattern TEXT    NOT NULL,
+        label   TEXT,
+        UNIQUE(repo, pattern)
+      );
     `);
   }
 
@@ -179,14 +200,14 @@ export class SqliteCache {
   getRepository(repoId: string): RepoMetadata | null {
     const row = this.db
       .prepare('SELECT * FROM repositories WHERE id = ?')
-      .get(repoId) as any;
+      .get(repoId) as RepoRow | undefined;
     return row ? this.rowToRepoMetadata(row) : null;
   }
 
   getRepositoryByPath(repoPath: string): RepoMetadata | null {
     const row = this.db
       .prepare('SELECT * FROM repositories WHERE path = ?')
-      .get(repoPath) as any;
+      .get(repoPath) as RepoRow | undefined;
     return row ? this.rowToRepoMetadata(row) : null;
   }
 
@@ -194,14 +215,14 @@ export class SqliteCache {
     const query = activeOnly
       ? 'SELECT * FROM repositories WHERE is_active = 1 ORDER BY created_at DESC'
       : 'SELECT * FROM repositories ORDER BY created_at DESC';
-    const rows = this.db.prepare(query).all() as any[];
+    const rows = this.db.prepare(query).all() as RepoRow[];
     return rows.map(r => this.rowToRepoMetadata(r));
   }
 
   getRepositoriesBySession(sessionId: string): RepoMetadata[] {
     const rows = this.db
       .prepare('SELECT * FROM repositories WHERE session_id = ? ORDER BY created_at DESC')
-      .all(sessionId) as any[];
+      .all(sessionId) as RepoRow[];
     return rows.map(r => this.rowToRepoMetadata(r));
   }
 
@@ -220,15 +241,15 @@ export class SqliteCache {
     return this.db.prepare('DELETE FROM repositories WHERE id = ?').run(repoId).changes;
   }
 
-  private rowToRepoMetadata(row: any): RepoMetadata {
+  private rowToRepoMetadata(row: RepoRow): RepoMetadata {
     return {
       id: row.id,
       path: row.path,
       name: row.name,
-      sessionId: row.session_id,
-      sessionType: row.session_type || 'unknown',
+      sessionId: row.session_id ?? undefined,
+      sessionType: (row.session_type as RepoMetadata['sessionType']) || 'unknown',
       createdAt: row.created_at,
-      lastAnalyzedAt: row.last_analyzed,
+      lastAnalyzedAt: row.last_analyzed ?? undefined,
       fileCount: row.file_count,
       overallRating: row.overall_rating,
       isActive: row.is_active === 1
@@ -237,5 +258,23 @@ export class SqliteCache {
 
   close(): void {
     this.db.close();
+  }
+
+  // Exclude patterns
+  getExcludePatterns(repo: string): Array<{ id: number; pattern: string; label: string | null }> {
+    return this.db
+      .prepare('SELECT id, pattern, label FROM exclude_patterns WHERE repo = ? ORDER BY id')
+      .all(repo) as Array<{ id: number; pattern: string; label: string | null }>;
+  }
+
+  addExcludePattern(repo: string, pattern: string, label?: string): number {
+    const result = this.db.prepare(
+      'INSERT OR IGNORE INTO exclude_patterns (repo, pattern, label) VALUES (?, ?, ?)'
+    ).run(repo, pattern, label ?? null);
+    return result.lastInsertRowid as number;
+  }
+
+  removeExcludePattern(id: number): boolean {
+    return this.db.prepare('DELETE FROM exclude_patterns WHERE id = ?').run(id).changes > 0;
   }
 }

@@ -1,0 +1,163 @@
+{
+  "jiraticket": "RMP-1234",
+  "task": [
+    {
+      "task": "T01",
+      "status": "ToDo",
+      "title": "title of the task",
+      "orderOfExecution": 1,
+      "description": "",
+      "acceptanceCriteria": [
+        {
+          "id": "AC-1",
+          "criterion": "When [condition], then [expected outcome]",
+          "priority": "Must Have",
+          "verified": false
+        },
+        {
+          "id": "AC-2",
+          "criterion": "System shall handle [scenario] without errors",
+          "priority": "Must Have",
+          "verified": false
+        },
+        {
+          "id": "AC-3",
+          "criterion": "[Feature] should display [result] when [action]",
+          "priority": "Should Have",
+          "verified": false
+        }
+      ],
+      "testScenarios": [
+        {
+          "id": "TS-1",
+          "title": "Happy Path - Successful Flow",
+          "description": "Test the primary happy path where all conditions are met",
+          "manualOnly": false,
+          "priority": "P0"
+        },
+        {
+          "id": "TS-2",
+          "title": "Edge Case - Invalid Input",
+          "description": "Test how the system handles invalid input data",
+          "manualOnly": false,
+          "priority": "P1"
+        },
+        {
+          "id": "TS-3",
+          "title": "Negative Scenario - System Failure",
+          "description": "Test the system's behavior under failure conditions",
+          "manualOnly": true,
+          "priority": "P2"
+        }
+      ],
+      "outOfScope": [
+        "What is intentionally not included in this task"
+      ],
+      "transitions": [
+        {
+          "from": "ToDo",
+          "to": "InProgress",
+          "actor": "developer",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        },
+        {
+          "from": "InProgress",
+          "to": "InReview",
+          "actor": "developer",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        },
+        {
+          "from": "InReview",
+          "to": "NeedsChanges",
+          "actor": "reviwer",
+          "notes": "feedback to developer",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        },
+        {
+          "from": "NeedsChanges",
+          "to": "InReview",
+          "actor": "developer",
+          "notes": "",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        },
+        {
+          "from": "InReview",
+          "to": "InQA",
+          "actor": "developer",
+          "notes": "",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        },
+        {
+          "from": "InQA",
+          "to": "NeedsChanges",
+          "actor": "developer",
+          "notes": "",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        },
+        {
+          "from": "InQA",
+          "to": "Done",
+          "actor": "developer",
+          "notes": "",
+          "developerNotes": "what is done summary",
+          "reviewerNotes": "Improve Code Coverage",
+          "qaNotes": "Ac1 is not implemented",
+          "filesChanges": [
+            "/src/service/controller.cs"
+          ],
+          "testFiles": [
+            "/test/service/controllertest.cs"
+          ]
+        }
+      ]
+    }
+  ]
+}

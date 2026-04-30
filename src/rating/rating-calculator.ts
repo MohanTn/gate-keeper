@@ -69,6 +69,16 @@ export class RatingCalculator {
       rating -= 0.5;
     }
 
+    if (metrics.coveragePercent !== undefined) {
+      if (metrics.coveragePercent < 50) {
+        items.push({ category: 'Low Test Coverage', deduction: 1.0, detail: `${metrics.coveragePercent.toFixed(1)}% coverage < 50%` });
+        rating -= 1.0;
+      } else if (metrics.coveragePercent < 80) {
+        items.push({ category: 'Moderate Test Coverage', deduction: 0.5, detail: `${metrics.coveragePercent.toFixed(1)}% coverage < 80%` });
+        rating -= 0.5;
+      }
+    }
+
     return {
       rating: Math.max(0, Math.min(10, Math.round(rating * 10) / 10)),
       breakdown: items

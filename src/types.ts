@@ -13,6 +13,8 @@ export interface Metrics {
   numberOfMethods: number;
   numberOfClasses: number;
   importCount: number;
+  /** Test coverage percentage (0–100). Undefined when no coverage data is available. */
+  coveragePercent?: number;
 }
 
 export interface Violation {
@@ -32,6 +34,7 @@ export interface FileAnalysis {
   rating: number;
   analyzedAt: number;
   repoRoot?: string;
+  definedTypes?: string[];
 }
 
 export interface GraphNode {
@@ -57,7 +60,7 @@ export interface GraphData {
 }
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete' | 'repo_list' | 'repo_created';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_progress' | 'scan_complete' | 'scan_log' | 'repo_list' | 'repo_created';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
@@ -67,6 +70,9 @@ export interface WSMessage {
   repos?: RepoMetadata[];
   repo?: RepoMetadata;
   currentRepo?: string;
+  logMessage?: string;
+  logLevel?: 'info' | 'warn' | 'error';
+  logTimestamp?: number;
 }
 
 export interface HookPayload {
@@ -97,6 +103,14 @@ export interface DaemonStatus {
 
 export interface Config {
   minRating: number;
+  scanExcludePatterns?: {
+    /** Glob patterns applied to all languages */
+    global?: string[];
+    /** Glob patterns for C# files (.cs) */
+    csharp?: string[];
+    /** Glob patterns for TypeScript/JavaScript/React files */
+    typescript?: string[];
+  };
 }
 
 export interface RepoMetadata {

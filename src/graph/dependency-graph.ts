@@ -14,6 +14,20 @@ export class DependencyGraph {
   toGraphData(): GraphData {
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
+    const edgeSet = new Set<string>();
+
+    // Build a type→filePath map from C# definedTypes for cross-file resolution
+    const typeToFile = new Map<string, string>();
+    for (const analysis of this.analyses.values()) {
+      if (analysis.definedTypes) {
+        for (const typeName of analysis.definedTypes) {
+          // If multiple files define the same type name, first one wins
+          if (!typeToFile.has(typeName)) {
+            typeToFile.set(typeName, analysis.path);
+          }
+        }
+      }
+    }
 
     for (const analysis of this.analyses.values()) {
       nodes.push({
@@ -27,13 +41,31 @@ export class DependencyGraph {
       });
 
       for (const dep of analysis.dependencies) {
-        if (this.analyses.has(dep.target)) {
-          edges.push({
-            source: dep.source,
-            target: dep.target,
-            type: dep.type,
-            strength: dep.weight
-          });
+        let targetPath = dep.target;
+
+        // Resolve __type__:TypeName references to file paths
+        if (targetPath.startsWith('__type__:')) {
+          const typeName = targetPath.substring('__type__:'.length);
+          const resolved = typeToFile.get(typeName);
+          if (resolved && resolved !== analysis.path) {
+            targetPath = resolved;
+          } else {
+            continue; // Unresolved type or self-reference — skip
+          }
+        }
+
+        if (this.analyses.has(targetPath)) {
+          // Deduplicate: don't add the same source→target edge twice
+          const edgeId = `${dep.source}→${targetPath}`;
+          if (!edgeSet.has(edgeId)) {
+            edgeSet.add(edgeId);
+            edges.push({
+              source: dep.source,
+              target: targetPath,
+              type: dep.type,
+              strength: dep.weight
+            });
+          }
         }
       }
     }
@@ -46,6 +78,16 @@ export class DependencyGraph {
     const visited = new Set<string>();
     const stack = new Set<string>();
 
+    // Build a type→filePath map for resolving __type__ refs
+    const typeToFile = new Map<string, string>();
+    for (const analysis of this.analyses.values()) {
+      if (analysis.definedTypes) {
+        for (const typeName of analysis.definedTypes) {
+          if (!typeToFile.has(typeName)) typeToFile.set(typeName, analysis.path);
+        }
+      }
+    }
+
     const dfs = (node: string, path: string[]): void => {
       visited.add(node);
       stack.add(node);
@@ -53,7 +95,12 @@ export class DependencyGraph {
       const analysis = this.analyses.get(node);
       if (analysis) {
         for (const dep of analysis.dependencies) {
-          const target = dep.target;
+          let target = dep.target;
+          if (target.startsWith('__type__:')) {
+            const resolved = typeToFile.get(target.substring('__type__:'.length));
+            if (resolved && resolved !== node) target = resolved;
+            else continue;
+          }
           if (!this.analyses.has(target)) continue;
           if (!visited.has(target)) {
             dfs(target, [...path, target]);

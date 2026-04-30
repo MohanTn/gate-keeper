@@ -51,6 +51,7 @@ export interface FileAnalysis {
   rating: number;
   violations: Violation[];
   metrics: Metrics;
+  definedTypes?: string[];
 }
 
 export interface RatingBreakdownItem {
@@ -71,7 +72,7 @@ export interface FileDetailResponse {
 }
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete' | 'repo_created' | 'repo_list';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_progress' | 'scan_complete' | 'repo_created' | 'repo_list' | 'scan_log';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
@@ -79,6 +80,9 @@ export interface WSMessage {
   scanTotal?: number;
   scanAnalyzed?: number;
   repo?: RepoInfo;
+  logMessage?: string;
+  logLevel?: 'info' | 'error' | 'warn';
+  logTimestamp?: number;
 }
 
 export interface RepoInfo {
@@ -92,4 +96,25 @@ export interface NodePosition {
   nodeId: string;
   x: number;
   y: number;
+}
+
+export interface ExcludePattern {
+  id: number;
+  pattern: string;
+  label: string | null;
+}
+
+export interface GateKeeperConfig {
+  minRating: number;
+  scanExcludePatterns?: {
+    global?: string[];
+    csharp?: string[];
+    typescript?: string[];
+  };
+}
+
+export interface ScanLogEntry {
+  message: string;
+  level: 'info' | 'error' | 'warn';
+  timestamp: number;
 }
