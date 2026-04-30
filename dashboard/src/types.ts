@@ -79,3 +79,15 @@ export interface WSMessage {
   scanTotal?: number;
   scanAnalyzed?: number;
 }
+
+export interface RepoInfo {
+  repoRoot: string;
+  label: string;
+  fileCount: number;
+}
+
+export interface NodePosition {
+  nodeId: string;
+  x: number;
+  y: number;
+}

@@ -2,17 +2,21 @@
  * gate-keeper hook-receiver
  *
  * Called by Claude Code's PostToolUse hook on every Write/Edit operation.
- * Must exit in < 100ms — all heavy work is delegated to the daemon.
- *
- * Reads JSON from stdin, extracts the file path, wakes the daemon (starting
- * it in the background if needed), then exits immediately.
+ * Waits for the daemon to finish analysis, then exits with code 2 (blocking
+ * feedback) if the file rating falls below the configured minimum — forcing
+ * Claude Code to surface the violations before the agent can continue.
  */
 
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
-import { HookPayload } from './types';
+import { spawn, spawnSync } from 'child_process';
+import { FileAnalysis, HookPayload } from './types';
+
+interface AnalyzeResponse {
+  analysis: FileAnalysis | null;
+  minRating: number;
+}
 
 const IPC_PORT = 5379;
 const PID_FILE = path.join(process.env.HOME ?? '/tmp', '.gate-keeper', 'daemon.pid');
@@ -31,11 +35,24 @@ async function main(): Promise<void> {
   if (!WATCHED_EXTENSIONS.has(ext)) return;
 
   await ensureDaemonRunning();
-  // Fire-and-forget: daemon analyzes asynchronously so this exits in < 100ms.
-  // Feedback for the CURRENT file will be queued by the daemon and delivered
-  // on the NEXT PostToolUse call via getFeedback() below.
-  await sendToDaemon(filePath);
-  await outputPendingFeedback();
+
+  const result = await sendToDaemon(filePath);
+  if (!result?.analysis) return;
+
+  const { analysis, minRating } = result;
+  if (analysis.rating < minRating) {
+    const lines: string[] = [
+      `[Gate Keeper] ${path.basename(filePath)} rated ${analysis.rating}/10 (minimum ${minRating}/10) — fix violations before proceeding:`,
+    ];
+    for (const v of analysis.violations) {
+      const loc = v.line != null ? ` (line ${v.line})` : '';
+      const fix = v.fix ? ` — ${v.fix}` : '';
+      lines.push(`  [${v.severity}] ${v.message}${loc}${fix}`);
+    }
+    lines.push(`\nRaise the rating to at least ${minRating}/10 before moving on.`);
+    process.stdout.write(lines.join('\n') + '\n');
+    process.exit(2);
+  }
 }
 
 function readStdin(): Promise<HookPayload | null> {
@@ -82,9 +99,17 @@ function isDaemonAlive(): boolean {
   }
 }
 
-function sendToDaemon(filePath: string): Promise<void> {
+function findGitRoot(dir: string): string {
+  const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: dir, encoding: 'utf8', timeout: 3000
+  });
+  return (result.status === 0 && result.stdout.trim()) ? result.stdout.trim() : dir;
+}
+
+function sendToDaemon(filePath: string): Promise<AnalyzeResponse | null> {
+  const repoRoot = findGitRoot(path.dirname(filePath));
   return new Promise(resolve => {
-    const body = JSON.stringify({ filePath });
+    const body = JSON.stringify({ filePath, repoRoot });
     const req = http.request(
       {
         hostname: '127.0.0.1',
@@ -97,12 +122,19 @@ function sendToDaemon(filePath: string): Promise<void> {
         }
       },
       res => {
-        res.resume();
-        res.on('end', resolve);
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => (data += chunk));
+        res.on('end', () => {
+          try { resolve(JSON.parse(data) as AnalyzeResponse); }
+          catch { resolve(null); }
+        });
       }
     );
-    req.on('error', () => resolve()); // daemon may not be ready yet — that's fine
-    req.setTimeout(1500, () => { req.destroy(); resolve(); });
+    req.on('error', () => resolve(null));
+    // Analysis can take a few seconds for large files — generous timeout so we
+    // don't silently drop the gate on slow machines.
+    req.setTimeout(8000, () => { req.destroy(); resolve(null); });
     req.write(body);
     req.end();
   });
@@ -112,37 +144,5 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-// Fetches any low-rating messages queued by the daemon and writes them to
-// stdout. Claude Code reads hook stdout and surfaces it to the model as
-// additional context after the tool use completes.
-function outputPendingFeedback(): Promise<void> {
-  return new Promise(resolve => {
-    const req = http.request(
-      {
-        hostname: '127.0.0.1',
-        port: IPC_PORT,
-        path: '/feedback',
-        method: 'GET'
-      },
-      res => {
-        let body = '';
-        res.setEncoding('utf8');
-        res.on('data', chunk => (body += chunk));
-        res.on('end', () => {
-          try {
-            const { messages } = JSON.parse(body) as { messages: string[] };
-            if (messages.length > 0) {
-              process.stdout.write(messages.join('\n\n') + '\n');
-            }
-          } catch {}
-          resolve();
-        });
-      }
-    );
-    req.on('error', () => resolve());
-    req.setTimeout(1000, () => { req.destroy(); resolve(); });
-    req.end();
-  });
-}
 
 main().catch(() => {}).finally(() => process.exit(0));

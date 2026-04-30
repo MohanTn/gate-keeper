@@ -1,9 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GraphView } from './components/GraphView';
 import { Sidebar } from './components/Sidebar';
-import { GraphData, GraphNode, WSMessage } from './types';
-
-const WS_URL = `ws://${window.location.host}`;
+import { GraphData, GraphNode, RepoInfo, WSMessage } from './types';
 
 function mergeGraphData(prev: GraphData, delta: { nodes: GraphNode[]; edges: any[] }): GraphData {
   const nodeMap = new Map(prev.nodes.map(n => [n.id, n]));
@@ -33,7 +31,10 @@ export default function App() {
   const [scanProgress, setScanProgress] = useState<{ analyzed: number; total: number } | null>(null);
   const [lastScan, setLastScan] = useState<{ fileCount: number; ts: number } | null>(null);
 
-  // Refs to avoid stale closures inside the WS handler
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
+  const [showRepoSelector, setShowRepoSelector] = useState(false);
+
   const scanningRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -44,9 +45,22 @@ export default function App() {
     setScanning(v);
   };
 
-  const connect = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
-    const ws = new WebSocket(WS_URL);
+  const connect = useCallback((repo: string | null) => {
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
+
+    const url = repo
+      ? `ws://${window.location.host}?repo=${encodeURIComponent(repo)}`
+      : `ws://${window.location.host}`;
+
+    const ws = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => setWsStatus('connected');
@@ -76,18 +90,41 @@ export default function App() {
 
     ws.onclose = () => {
       setWsStatus('disconnected');
-      reconnectTimer.current = setTimeout(connect, 3000);
+      reconnectTimer.current = setTimeout(() => connect(repo), 3000);
     };
     ws.onerror = () => ws.close();
-  };
+  }, []);
 
+  // Fetch repos then decide: auto-select single or show picker
   useEffect(() => {
-    connect();
+    fetch('/api/repos')
+      .then(r => r.json())
+      .then((data: RepoInfo[]) => {
+        setRepos(data);
+        if (data.length === 1) {
+          setSelectedRepo(data[0].repoRoot);
+          connect(data[0].repoRoot);
+        } else if (data.length > 1) {
+          setShowRepoSelector(true);
+          connect(null); // show merged view while picking
+        } else {
+          connect(null); // no repos yet — real-time only
+        }
+      })
+      .catch(() => connect(null));
+
     return () => {
       wsRef.current?.close();
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     };
-  }, []);
+  }, [connect]);
+
+  const handleRepoSelect = (repo: string) => {
+    setSelectedRepo(repo);
+    setShowRepoSelector(false);
+    setGraphData({ nodes: [], edges: [] });
+    connect(repo);
+  };
 
   const handleScanAll = async () => {
     if (scanningRef.current) return;
@@ -96,11 +133,9 @@ export default function App() {
     try {
       const res = await fetch('/api/scan', { method: 'POST' });
       if (!res.ok) {
-        // Server might return 409 if already scanning
         setScanningState(false);
         setScanProgress(null);
       }
-      // scan_start WS message will confirm and update total count
     } catch {
       setScanningState(false);
       setScanProgress(null);
@@ -116,24 +151,20 @@ export default function App() {
     : null;
 
   const statusDot = { connecting: '#eab308', connected: '#22c55e', disconnected: '#ef4444' }[wsStatus];
+  const currentRepoLabel = selectedRepo
+    ? (repos.find(r => r.repoRoot === selectedRepo)?.label ?? selectedRepo.split('/').pop())
+    : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f172a', fontFamily: 'ui-monospace, "Cascadia Code", "SF Mono", monospace' }}>
 
       {/* ── Header ─────────────────────────────────────────── */}
       <header style={{
-        height: 52,
-        minHeight: 52,
-        background: '#0f172a',
-        borderBottom: '1px solid #1e293b',
-        display: 'flex',
-        alignItems: 'center',
-        padding: '0 20px',
-        gap: 24,
-        zIndex: 20,
-        flexShrink: 0
+        height: 52, minHeight: 52,
+        background: '#0f172a', borderBottom: '1px solid #1e293b',
+        display: 'flex', alignItems: 'center', padding: '0 20px', gap: 24,
+        zIndex: 20, flexShrink: 0
       }}>
-        {/* Brand */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 18, color: '#3b82f6', letterSpacing: -0.5 }}>⬡</span>
           <span style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', letterSpacing: -0.3 }}>Gate Keeper</span>
@@ -143,38 +174,41 @@ export default function App() {
           </span>
         </div>
 
-        {/* Divider */}
         <div style={{ width: 1, height: 24, background: '#1e293b' }} />
 
-        {/* Metrics */}
+        {/* Repo selector button */}
+        <button
+          onClick={() => setShowRepoSelector(true)}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: '#1e293b', border: '1px solid #334155',
+            borderRadius: 6, color: currentRepoLabel ? '#94a3b8' : '#475569',
+            cursor: 'pointer', fontSize: 12, padding: '4px 10px',
+            maxWidth: 220, overflow: 'hidden'
+          }}
+        >
+          <span style={{ color: '#3b82f6' }}>◈</span>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {currentRepoLabel ?? 'All repos'}
+          </span>
+          {repos.length > 1 && <span style={{ color: '#475569', marginLeft: 2 }}>▾</span>}
+        </button>
+
+        <div style={{ width: 1, height: 24, background: '#1e293b' }} />
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
           <StatPill label="Files" value={graphData.nodes.length} color="#94a3b8" />
           {overallRating !== null && (
-            <StatPill
-              label="Arch Score"
-              value={`${overallRating.toFixed(1)}/10`}
-              color={ratingColor(overallRating)}
-              bold
-            />
+            <StatPill label="Arch Score" value={`${overallRating.toFixed(1)}/10`} color={ratingColor(overallRating)} bold />
           )}
-          <StatPill
-            label="Violations"
-            value={totalViolations}
-            color={totalViolations > 0 ? '#ef4444' : '#22c55e'}
-          />
-          {errorCount > 0 && (
-            <StatPill label="Errors" value={errorCount} color="#ef4444" bold />
-          )}
+          <StatPill label="Violations" value={totalViolations} color={totalViolations > 0 ? '#ef4444' : '#22c55e'} />
+          {errorCount > 0 && <StatPill label="Errors" value={errorCount} color="#ef4444" bold />}
         </div>
 
-        {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Last scan result */}
         {lastScan && !scanning && (
-          <span style={{ fontSize: 12, color: '#475569' }}>
-            Last scan: {lastScan.fileCount} files
-          </span>
+          <span style={{ fontSize: 12, color: '#475569' }}>Last scan: {lastScan.fileCount} files</span>
         )}
         {scanning && scanProgress && (
           <span style={{ fontSize: 12, color: '#eab308' }}>
@@ -182,35 +216,24 @@ export default function App() {
           </span>
         )}
 
-        {/* Scan button */}
         <button
           onClick={handleScanAll}
           disabled={scanning || wsStatus !== 'connected'}
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
+            display: 'flex', alignItems: 'center', gap: 6,
             background: scanning ? '#1e293b' : '#1d4ed8',
             border: `1px solid ${scanning ? '#334155' : '#2563eb'}`,
-            borderRadius: 6,
-            color: scanning ? '#475569' : '#eff6ff',
+            borderRadius: 6, color: scanning ? '#475569' : '#eff6ff',
             cursor: scanning ? 'not-allowed' : 'pointer',
-            fontSize: 13,
-            fontWeight: 600,
-            padding: '6px 14px',
-            letterSpacing: 0.2,
-            transition: 'all 0.15s'
+            fontSize: 13, fontWeight: 600, padding: '6px 14px',
+            letterSpacing: 0.2, transition: 'all 0.15s'
           }}
         >
-          <span style={{
-            display: 'inline-block',
-            animation: scanning ? 'spin 1s linear infinite' : 'none'
-          }}>⟳</span>
+          <span style={{ display: 'inline-block', animation: scanning ? 'spin 1s linear infinite' : 'none' }}>⟳</span>
           {scanning ? 'Scanning…' : 'Scan All Files'}
         </button>
       </header>
 
-      {/* Spin keyframes injected once */}
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
       {/* ── Main area ──────────────────────────────────────── */}
@@ -219,6 +242,7 @@ export default function App() {
           graphData={graphData}
           onNodeClick={setSelectedNode}
           highlightNodeId={selectedNode?.id}
+          selectedRepo={selectedRepo}
         />
         <Sidebar
           graphData={graphData}
@@ -227,6 +251,16 @@ export default function App() {
           onNodeSelect={setSelectedNode}
         />
       </div>
+
+      {/* ── Repo selector modal ─────────────────────────────── */}
+      {showRepoSelector && (
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={selectedRepo}
+          onSelect={handleRepoSelect}
+          onClose={() => setShowRepoSelector(false)}
+        />
+      )}
     </div>
   );
 }
@@ -239,9 +273,80 @@ function StatPill({ label, value, color, bold }: {
       <span style={{ fontSize: 10, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 }}>
         {label}
       </span>
-      <span style={{ fontSize: 16, fontWeight: bold ? 700 : 600, color }}>
-        {value}
-      </span>
+      <span style={{ fontSize: 16, fontWeight: bold ? 700 : 600, color }}>{value}</span>
+    </div>
+  );
+}
+
+function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
+  repos: RepoInfo[];
+  selectedRepo: string | null;
+  onSelect: (repo: string) => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 100,
+        background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center'
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#0f172a', border: '1px solid #1e293b',
+          borderRadius: 12, padding: 24, minWidth: 360, maxWidth: 520,
+          boxShadow: '0 25px 60px rgba(0,0,0,0.6)'
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#f1f5f9', marginBottom: 6 }}>
+          Select Repository
+        </div>
+        <div style={{ fontSize: 12, color: '#475569', marginBottom: 20 }}>
+          Multiple repos found in the database. Pick one to view.
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {repos.map(r => (
+            <button
+              key={r.repoRoot}
+              onClick={() => onSelect(r.repoRoot)}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                background: selectedRepo === r.repoRoot ? '#1e3a5f' : '#0d1526',
+                border: `1px solid ${selectedRepo === r.repoRoot ? '#3b82f6' : '#1e293b'}`,
+                borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
+                color: '#f1f5f9', textAlign: 'left', transition: 'all 0.12s'
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 2 }}>
+                  {r.label}
+                </div>
+                <div style={{ fontSize: 11, color: '#475569', fontFamily: 'monospace' }}>
+                  {r.repoRoot}
+                </div>
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b', marginLeft: 16, whiteSpace: 'nowrap' }}>
+                {r.fileCount} file{r.fileCount !== 1 ? 's' : ''}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <button
+          onClick={onClose}
+          style={{
+            marginTop: 16, width: '100%', padding: '8px 0',
+            background: 'transparent', border: '1px solid #1e293b',
+            borderRadius: 6, color: '#475569', cursor: 'pointer', fontSize: 12
+          }}
+        >
+          Cancel (show all)
+        </button>
+      </div>
     </div>
   );
 }

@@ -31,6 +31,7 @@ export interface FileAnalysis {
   violations: Violation[];
   rating: number;
   analyzedAt: number;
+  repoRoot?: string;
 }
 
 export interface GraphNode {
@@ -80,6 +81,7 @@ export interface HookPayload {
 
 export interface DaemonRequest {
   filePath: string;
+  repoRoot: string;
 }
 
 export interface DaemonStatus {

@@ -10,6 +10,7 @@
 import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
 import { UniversalAnalyzer } from './analyzer/universal-analyzer';
 import { SqliteCache } from './cache/sqlite-cache';
 import { VizServer } from './viz/viz-server';
@@ -38,16 +39,24 @@ function ensureConfigFile(): void {
   }
 }
 
+function findGitRoot(dir: string): string {
+  const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: dir, encoding: 'utf8', timeout: 3000
+  });
+  return (result.status === 0 && result.stdout.trim()) ? result.stdout.trim() : dir;
+}
+
 async function main(): Promise<void> {
   ensurePidFile();
   ensureConfigFile();
 
   const config = loadConfig();
-  const pendingFeedback: string[] = [];
+  const workDir = process.cwd();
+  const repoRoot = findGitRoot(workDir);
 
   const cache = new SqliteCache();
   const analyzer = new UniversalAnalyzer();
-  const vizServer = new VizServer(cache, analyzer, process.cwd());
+  const vizServer = new VizServer(cache, analyzer, workDir, repoRoot);
 
   await vizServer.start();
 
@@ -64,50 +73,35 @@ async function main(): Promise<void> {
     res.json({ ok: true, pid: process.pid });
   });
 
-  // Returns and clears any low-rating feedback queued since the last call.
-  // The hook-receiver calls this after each PostToolUse event to surface
-  // warnings to Claude Code without blocking the < 100ms exit window.
-  ipc.get('/feedback', (_req, res) => {
-    const messages = pendingFeedback.splice(0);
-    res.json({ messages });
-  });
-
+  // Synchronously analyzes the file and returns the result so the hook-receiver
+  // can gate on the rating in the same PostToolUse event.
   ipc.post('/analyze', async (req, res) => {
-    const { filePath } = req.body as DaemonRequest;
-    res.json({ queued: true });
+    const { filePath, repoRoot: reqRepo } = req.body as DaemonRequest;
 
-    if (!filePath || !fs.existsSync(filePath)) return;
-    if (!analyzer.isSupportedFile(filePath)) return;
+    if (!filePath || !fs.existsSync(filePath) || !analyzer.isSupportedFile(filePath)) {
+      res.json({ analysis: null, minRating: loadConfig().minRating });
+      return;
+    }
 
     try {
       const analysis = await analyzer.analyze(filePath);
-      if (!analysis) return;
+      if (!analysis) {
+        res.json({ analysis: null, minRating: loadConfig().minRating });
+        return;
+      }
+      analysis.repoRoot = reqRepo || repoRoot;
       cache.save(analysis);
       vizServer.pushAnalysis(analysis);
 
-      const { rating, violations } = analysis;
-      console.error(
-        `[gate-keeper] ${path.basename(filePath)} — rating: ${rating}/10, violations: ${violations.length}`
-      );
-
-      // Re-read config on each analysis so hot-editing config.json takes effect
       const liveConfig = loadConfig();
-      if (rating < liveConfig.minRating) {
-        const lines: string[] = [
-          `[Gate Keeper] Low quality: ${path.basename(filePath)} rated ${rating}/10 (minimum ${liveConfig.minRating}/10)`,
-          'Violations to fix:'
-        ];
-        for (const v of violations) {
-          const loc = v.line != null ? ` (line ${v.line})` : '';
-          const fix = v.fix ? ` — ${v.fix}` : '';
-          lines.push(`  [${v.severity}] ${v.message}${loc}${fix}`);
-        }
-        lines.push(`Raise the rating to at least ${liveConfig.minRating}/10 before moving on.`);
-        pendingFeedback.push(lines.join('\n'));
-      }
+      console.error(
+        `[gate-keeper] ${path.basename(filePath)} — rating: ${analysis.rating}/10, violations: ${analysis.violations.length}`
+      );
+      res.json({ analysis, minRating: liveConfig.minRating });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[gate-keeper] Analysis error for ${filePath}: ${msg}`);
+      res.json({ analysis: null, minRating: loadConfig().minRating });
     }
   });
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
 
 interface SidebarProps {
@@ -352,8 +352,11 @@ function FileDetailPanel({
         {/* Violations */}
         {node.violations.length > 0 && (
           <div style={{ padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
-            <SectionLabel>Violations ({node.violations.length})</SectionLabel>
-            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <SectionLabel>Violations ({node.violations.length})</SectionLabel>
+              <CopyViolationsButton node={node} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {node.violations.map((v, i) => (
                 <div key={i} style={{
                   background: '#0f172a',
@@ -401,6 +404,49 @@ function FileDetailPanel({
         )}
       </div>
     </div>
+  );
+}
+
+function CopyViolationsButton({ node }: { node: GraphNode }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(() => {
+    const lines: string[] = [
+      `File: ${node.id}`,
+      `Rating: ${node.rating}/10`,
+      `Violations: ${node.violations.length}`,
+      '',
+    ];
+    node.violations.forEach((v, i) => {
+      lines.push(`${i + 1}. [${v.severity.toUpperCase()}] ${v.message}`);
+      if (v.line) lines.push(`   Line: ${v.line}`);
+      if (v.fix) lines.push(`   Fix: ${v.fix}`);
+      lines.push('');
+    });
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  }, [node]);
+
+  return (
+    <button
+      onClick={handleCopy}
+      style={{
+        fontSize: 11,
+        padding: '3px 10px',
+        background: copied ? 'rgba(34,197,94,0.1)' : '#0f172a',
+        border: `1px solid ${copied ? T.green : T.border}`,
+        borderRadius: 5,
+        color: copied ? T.green : T.textMuted,
+        cursor: 'pointer',
+        transition: 'all 0.2s',
+        whiteSpace: 'nowrap' as const,
+        flexShrink: 0,
+      }}
+    >
+      {copied ? '✓ Copied!' : 'Copy All'}
+    </button>
   );
 }
 
