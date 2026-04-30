@@ -45,23 +45,25 @@ The result: you can see your codebase architecture health in real time, alongsid
 Gate Keeper runs as **two separate processes** plus a React dashboard.
 
 ```
-Claude Code / Copilot
-       │
-       │  PostToolUse hook (Write/Edit)
-       ▼
-┌─────────────────────┐
-│   hook-receiver.ts  │  Must exit < 100ms
-│   (short-lived)     │  Checks extension → wakes daemon → fires POST /analyze
-└──────────┬──────────┘
-           │  HTTP POST to localhost:5379
-           ▼
-┌─────────────────────┐         ┌──────────────────────┐
-│     daemon.ts       │────────▶│   SQLite cache.db    │
-│   (long-lived)      │         │  ~/.gate-keeper/     │
-│                     │         └──────────────────────┘
-│  UniversalAnalyzer  │
-│  RatingCalculator   │
-│  DependencyGraph    │
+Claude Code                    GitHub Copilot (VS Code)
+    │                                   │
+    │  SessionStart hook (once/session) │  folderOpen task (once/open)
+    │  PostToolUse hook (Write/Edit)    │  (no native hook API)
+    ▼                                   ▼
+┌──────────────────────────────────────────┐
+│             hook-receiver.ts             │  Must exit < 100ms
+│  SessionStart / session_create           │  → register repo in daemon
+│  PostToolUse Write|Edit                  │  → POST /analyze to daemon
+└───────────────────┬──────────────────────┘
+                    │  HTTP POST to localhost:5379
+                    ▼
+┌─────────────────────┐         ┌──────────────────────────┐
+│     daemon.ts       │────────▶│  ~/.gate-keeper/cache.db │
+│   (long-lived)      │         │  SQLite — analyses,      │
+│                     │         │  rating_history,         │
+│  UniversalAnalyzer  │         │  repositories,           │
+│  RatingCalculator   │         │  node_positions          │
+│  DependencyGraph    │         └──────────────────────────┘
 │  VizServer          │
 └──────────┬──────────┘
            │  WebSocket broadcast
@@ -209,7 +211,7 @@ npm run build:dashboard  # compile dashboard/src/ → dashboard/dist/
 
 ## Setup with Claude Code
 
-Gate Keeper integrates with Claude Code via the `PostToolUse` hook. The hook fires after every `Write` or `Edit` tool call, pipes the event JSON to `hook-receiver.js`, and returns immediately — Gate Keeper never adds latency to the AI.
+Gate Keeper uses two hooks. `SessionStart` fires **once when a session opens** and registers the repo in the database. `PostToolUse` fires after every `Write`/`Edit` and triggers file analysis. Both call the same `hook-receiver.js`.
 
 ### Option A — Global hook (recommended)
 
@@ -218,6 +220,16 @@ Add to `~/.claude/settings.json`:
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /absolute/path/to/gate-keeper/dist/hook-receiver.js"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",
@@ -235,106 +247,73 @@ Add to `~/.claude/settings.json`:
 
 Replace `/absolute/path/to/gate-keeper` with the actual path where you cloned this repo.
 
+**What each hook does:**
+
+| Hook | Fires | Action |
+|------|-------|--------|
+| `SessionStart` | Once at session open | Resolves git root, registers repo in SQLite, triggers initial file scan |
+| `PostToolUse` (Write\|Edit) | Every file write | Analyzes the file, rates it, broadcasts to dashboard |
+
 ### Option B — Project-level hook
 
-Add to `.claude/settings.json` inside any project you want to monitor:
+Add to `.claude/settings.json` inside any project you want to monitor — same JSON structure as Option A above.
 
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node /absolute/path/to/gate-keeper/dist/hook-receiver.js"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### Verify the hook is firing
+### Verify the hooks are firing
 
 ```bash
 # Start the daemon manually
 node /path/to/gate-keeper/dist/daemon.js
 
-# In another terminal, simulate a hook event
+# Simulate a SessionStart event (repo registration)
+echo '{"hook_event_name":"SessionStart","session_id":"test-123","cwd":"/path/to/your/project"}' \
+  | node /path/to/gate-keeper/dist/hook-receiver.js
+
+# Simulate a file-write event (analysis)
 echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/your/file.ts"}}' \
   | node /path/to/gate-keeper/dist/hook-receiver.js
 ```
 
-You should see the analysis appear on the daemon's stderr and in the dashboard.
+You should see the repo and analysis appear on the daemon's stderr and in the dashboard.
 
 ---
 
-## Setup with GitHub Copilot (VS Code Agent)
+## Setup with GitHub Copilot (VS Code)
 
-GitHub Copilot Agent in VS Code fires events when it writes files via its agent loop. You can wire Gate Keeper into those events using VS Code tasks.
+GitHub Copilot has no hook API, so Gate Keeper uses **VS Code's built-in task runner** as a bridge. The repo ships a ready-to-use `.vscode/tasks.json` with two tasks.
 
-### Option A — VS Code Task on file save
+### How it works
 
-Add to `.vscode/tasks.json` in your project:
-
-```json
-{
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "label": "Gate Keeper: Analyze on Save",
-      "type": "shell",
-      "command": "echo '{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${file}\"}}' | node /absolute/path/to/gate-keeper/dist/hook-receiver.js",
-      "runOptions": {
-        "runOn": "folderOpen"
-      },
-      "presentation": {
-        "reveal": "silent",
-        "panel": "shared"
-      }
-    }
-  ]
-}
-```
-
-### Option B — VS Code Extension `onDidSaveTextDocument`
-
-If you maintain a VS Code extension, call the hook-receiver on every save:
-
-```typescript
-import * as vscode from 'vscode';
-import { exec } from 'child_process';
-
-export function activate(context: vscode.ExtensionContext) {
-  const hookReceiver = '/absolute/path/to/gate-keeper/dist/hook-receiver.js';
-
-  vscode.workspace.onDidSaveTextDocument(doc => {
-    const payload = JSON.stringify({
-      tool_name: 'Write',
-      tool_input: { file_path: doc.fileName }
-    });
-    const cmd = `echo '${payload}' | node "${hookReceiver}"`;
-    exec(cmd, { timeout: 5000 });
-  });
-}
-```
-
-### Option C — Shell alias for any Copilot workflow
-
-If you use Copilot CLI or apply patches manually, add an alias to trigger analysis:
+VS Code supports `"runOn": "folderOpen"` tasks that execute silently whenever a workspace is opened. The task crafts a `session_create` JSON payload and pipes it to `hook-receiver.js` — the same binary Claude Code calls:
 
 ```bash
-# Add to ~/.bashrc or ~/.zshrc
-gk-analyze() {
-  echo "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$1\"}}" \
-    | node /absolute/path/to/gate-keeper/dist/hook-receiver.js
-}
+# What the task runs on every folder open:
+echo '{
+  "hook_event_name": "session_create",
+  "tool_name":       "vscode",
+  "session_id":      "copilot-<epoch-timestamp>",
+  "session_info": {
+    "workspace_path": "${workspaceFolder}",
+    "session_type":   "github-copilot"
+  }
+}' | node /path/to/gate-keeper/dist/hook-receiver.js
 ```
 
-Then call `gk-analyze ./src/MyComponent.tsx` after any Copilot-generated file write.
+### Setup
+
+1. Copy `.vscode/tasks.json` from this repo into your project's `.vscode/` folder (or merge if one already exists).
+2. Update the path in both task `command` fields to point to your `gate-keeper/dist/hook-receiver.js`.
+3. Re-open the folder in VS Code — you should see Gate Keeper register the repo silently.
+
+The included `tasks.json` provides two tasks:
+
+| Task | Trigger | Purpose |
+|------|---------|---------|
+| Gate Keeper: Register Repo on Open | `folderOpen` (automatic) | Registers the repo + starts initial scan |
+| Gate Keeper: Analyze Current File | Manual (Tasks palette) | Analyze `${file}` on demand without editing it |
+
+### Enabling `folderOpen` tasks
+
+VS Code will prompt once to allow automatic tasks. Accept, or run the task manually via **Terminal → Run Task** on first use.
 
 ---
 
@@ -416,10 +395,23 @@ curl 'http://localhost:5378/api/trends?file=/path/to/file.ts'
 | Resource | Purpose |
 |----------|---------|
 | `:5378` | Dashboard HTTP + WebSocket server |
-| `:5379` (localhost only) | Daemon IPC — receives `/analyze` from hook-receiver |
-| `~/.gate-keeper/cache.db` | SQLite database — stores analyses and rating history |
-| `~/.gate-keeper/daemon.pid` | PID file — hook-receiver checks daemon liveness here |
+| `:5379` (localhost only) | Daemon IPC — receives `/analyze` and `/repo-register` from hook-receiver |
+| `~/.gate-keeper/cache.db` | **SQLite database** — stores all file analyses, rating history, repo metadata, and node positions |
+| `~/.gate-keeper/config.json` | Daemon config — edit `minRating` (default `6.5`) to change the blocking threshold |
+| `~/.gate-keeper/daemon.pid` | PID file — hook-receiver checks daemon liveness via `kill -0` |
+| `~/.gate-keeper/sessions/<id>` | Per-session marker files — prevent duplicate `UserPromptSubmit` registrations |
 | `dashboard/dist/` | Built dashboard, served at `/viz/` |
+
+### SQLite schema
+
+The database at `~/.gate-keeper/cache.db` has four tables:
+
+| Table | Contents |
+|-------|---------|
+| `analyses` | One row per file per repo — full `FileAnalysis` JSON, rating, language |
+| `rating_history` | Append-only rating log per file — used for trend charts |
+| `repositories` | One row per registered repo — path, name, session ID, overall rating, file count |
+| `node_positions` | Saved x/y positions for each graph node — persists dashboard layout across reloads |
 
 ---
 

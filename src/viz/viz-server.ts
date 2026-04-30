@@ -9,7 +9,7 @@ import { DependencyGraph } from '../graph/dependency-graph';
 import { SqliteCache } from '../cache/sqlite-cache';
 import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { RatingCalculator } from '../rating/rating-calculator';
-import { FileAnalysis, GraphData, GraphNode, WSMessage } from '../types';
+import { FileAnalysis, GraphData, GraphNode, RepoMetadata, WSMessage } from '../types';
 
 const VIZ_PORT = 5378;
 
@@ -130,12 +130,35 @@ export class VizServer {
     this.app.get('/', (_req, res) => res.redirect('/viz'));
 
     this.app.get('/api/repos', (_req, res) => {
-      const repos = this.cache.getRepos();
-      res.json(repos.map(repo => ({
-        repoRoot: repo,
-        label: path.basename(repo),
-        fileCount: this.graphs.get(repo)?.toGraphData().nodes.length ?? 0
-      })));
+      // Merge registered repos (repositories table) with repos that have analyses
+      const registered = this.cache.getAllRepositories(true);
+      const analyzedRoots = new Set(this.cache.getRepos());
+
+      const repoMap = new Map<string, { repoRoot: string; label: string; fileCount: number; sessionType: string }>();
+
+      // Seed from registered repos first (they have session metadata)
+      for (const r of registered) {
+        repoMap.set(r.path, {
+          repoRoot: r.path,
+          label: r.name,
+          fileCount: this.graphs.get(r.path)?.toGraphData().nodes.length ?? 0,
+          sessionType: r.sessionType
+        });
+      }
+
+      // Add any repos that have analyses but weren't explicitly registered
+      for (const repo of analyzedRoots) {
+        if (!repoMap.has(repo)) {
+          repoMap.set(repo, {
+            repoRoot: repo,
+            label: path.basename(repo),
+            fileCount: this.graphs.get(repo)?.toGraphData().nodes.length ?? 0,
+            sessionType: 'unknown'
+          });
+        }
+      }
+
+      res.json(Array.from(repoMap.values()));
     });
 
     this.app.get('/api/graph', (req, res) => {
@@ -238,6 +261,18 @@ export class VizServer {
       this.cache.saveNodePosition(repo, nodeId, x, y);
       res.json({ ok: true });
     });
+
+    this.app.post('/api/clear', (req, res) => {
+      const { repo } = req.body as { repo: string };
+      if (!repo) {
+        res.status(400).json({ error: 'repo parameter required' });
+        return;
+      }
+      const deleted = this.cache.clearRepo(repo);
+      this.graphs.delete(repo);
+      console.error(`[gate-keeper] Cleared ${deleted} analyses for repo: ${repo}`);
+      res.json({ ok: true, deleted });
+    });
   }
 
   private setupWebSocket(): void {
@@ -317,6 +352,56 @@ export class VizServer {
       scanAnalyzed: analyzed
     } satisfies WSMessage);
     console.error(`[gate-keeper] Scan complete: ${analyzed}/${toScan.length}`);
+    this.scanning = false;
+  }
+
+  broadcastRepoCreated(repo: RepoMetadata): void {
+    this.broadcast({ type: 'repo_created', repo } satisfies WSMessage);
+  }
+
+  async scanRepo(repoRoot: string): Promise<void> {
+    if (this.scanning) return;
+    this.scanning = true;
+
+    const cachedPaths = new Set(this.cache.getAll(repoRoot).map(a => a.path));
+    const toScan: string[] = [];
+    for (const filePath of walkFiles(repoRoot)) {
+      if (this.analyzer.isSupportedFile(filePath) && !cachedPaths.has(filePath)) {
+        toScan.push(filePath);
+      }
+    }
+
+    if (toScan.length === 0) {
+      this.scanning = false;
+      return;
+    }
+
+    this.broadcast({ type: 'scan_start', scanTotal: toScan.length } satisfies WSMessage);
+    console.error(`[gate-keeper] Scanning ${toScan.length} files for new repo: ${path.basename(repoRoot)}`);
+
+    const CONCURRENCY = 8;
+    let analyzed = 0;
+    for (let i = 0; i < toScan.length; i += CONCURRENCY) {
+      const batch = toScan.slice(i, i + CONCURRENCY);
+      await Promise.all(
+        batch.map(async (filePath) => {
+          try {
+            const analysis = await this.analyzer.analyze(filePath);
+            if (!analysis) return;
+            analysis.repoRoot = repoRoot;
+            this.cache.save(analysis);
+            this.pushAnalysis(analysis);
+            analyzed++;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.error(`[gate-keeper] Scan error for ${filePath}: ${msg}`);
+          }
+        })
+      );
+    }
+
+    this.broadcast({ type: 'scan_complete', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
+    console.error(`[gate-keeper] Repo scan complete: ${analyzed}/${toScan.length} for ${path.basename(repoRoot)}`);
     this.scanning = false;
   }
 

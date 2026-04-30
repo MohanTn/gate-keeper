@@ -71,19 +71,21 @@ export interface FileDetailResponse {
 }
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete' | 'repo_created' | 'repo_list';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
   error?: string;
   scanTotal?: number;
   scanAnalyzed?: number;
+  repo?: RepoInfo;
 }
 
 export interface RepoInfo {
   repoRoot: string;
   label: string;
   fileCount: number;
+  sessionType?: 'claude' | 'github-copilot' | 'unknown';
 }
 
 export interface NodePosition {

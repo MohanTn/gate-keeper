@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
-import { FileAnalysis } from '../types';
+import { FileAnalysis, RepoMetadata } from '../types';
 
 const DB_PATH = path.join(
   process.env.HOME ?? '/tmp',
@@ -55,9 +55,24 @@ export class SqliteCache {
         PRIMARY KEY (repo, node_id)
       );
 
+      CREATE TABLE IF NOT EXISTS repositories (
+        id             TEXT    PRIMARY KEY,
+        path           TEXT    NOT NULL UNIQUE,
+        name           TEXT    NOT NULL,
+        session_id     TEXT,
+        session_type   TEXT    DEFAULT 'unknown',
+        created_at     INTEGER NOT NULL,
+        last_analyzed  INTEGER,
+        file_count     INTEGER DEFAULT 0,
+        overall_rating REAL    DEFAULT 10.0,
+        is_active      INTEGER DEFAULT 1
+      );
+
       CREATE INDEX IF NOT EXISTS idx_analyses_repo ON analyses(repo);
       CREATE INDEX IF NOT EXISTS idx_rh_repo_path  ON rating_history(repo, path);
       CREATE INDEX IF NOT EXISTS idx_rh_time       ON rating_history(recorded_at);
+      CREATE INDEX IF NOT EXISTS idx_repos_session ON repositories(session_id);
+      CREATE INDEX IF NOT EXISTS idx_repos_active  ON repositories(is_active);
     `);
   }
 
@@ -127,6 +142,97 @@ export class SqliteCache {
       .prepare('SELECT node_id, x, y FROM node_positions WHERE repo = ?')
       .all(repo) as Array<{ node_id: string; x: number; y: number }>)
       .map(r => ({ nodeId: r.node_id, x: r.x, y: r.y }));
+  }
+
+  clearRepo(repo: string): number {
+    const deletedAnalyses = this.db.prepare('DELETE FROM analyses WHERE repo = ?').run(repo).changes;
+    this.db.prepare('DELETE FROM rating_history WHERE repo = ?').run(repo);
+    this.db.prepare('DELETE FROM node_positions WHERE repo = ?').run(repo);
+    return deletedAnalyses;
+  }
+
+  // Repository management
+  saveRepository(repo: RepoMetadata): void {
+    // ON CONFLICT preserves created_at / stats; only mutable session fields are updated
+    this.db.prepare(`
+      INSERT INTO repositories (id, path, name, session_id, session_type, created_at, last_analyzed, file_count, overall_rating, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name        = excluded.name,
+        session_id  = excluded.session_id,
+        session_type = excluded.session_type,
+        is_active   = excluded.is_active
+    `).run(
+      repo.id,
+      repo.path,
+      repo.name,
+      repo.sessionId || null,
+      repo.sessionType,
+      repo.createdAt,
+      repo.lastAnalyzedAt || null,
+      repo.fileCount || 0,
+      repo.overallRating || 10.0,
+      repo.isActive ? 1 : 0
+    );
+  }
+
+  getRepository(repoId: string): RepoMetadata | null {
+    const row = this.db
+      .prepare('SELECT * FROM repositories WHERE id = ?')
+      .get(repoId) as any;
+    return row ? this.rowToRepoMetadata(row) : null;
+  }
+
+  getRepositoryByPath(repoPath: string): RepoMetadata | null {
+    const row = this.db
+      .prepare('SELECT * FROM repositories WHERE path = ?')
+      .get(repoPath) as any;
+    return row ? this.rowToRepoMetadata(row) : null;
+  }
+
+  getAllRepositories(activeOnly = false): RepoMetadata[] {
+    const query = activeOnly
+      ? 'SELECT * FROM repositories WHERE is_active = 1 ORDER BY created_at DESC'
+      : 'SELECT * FROM repositories ORDER BY created_at DESC';
+    const rows = this.db.prepare(query).all() as any[];
+    return rows.map(r => this.rowToRepoMetadata(r));
+  }
+
+  getRepositoriesBySession(sessionId: string): RepoMetadata[] {
+    const rows = this.db
+      .prepare('SELECT * FROM repositories WHERE session_id = ? ORDER BY created_at DESC')
+      .all(sessionId) as any[];
+    return rows.map(r => this.rowToRepoMetadata(r));
+  }
+
+  updateRepositoryStats(repoId: string, fileCount: number, overallRating: number): void {
+    this.db.prepare(`
+      UPDATE repositories 
+      SET file_count = ?, overall_rating = ?, last_analyzed = ?
+      WHERE id = ?
+    `).run(fileCount, overallRating, Date.now(), repoId);
+  }
+
+  deleteRepository(repoId: string): number {
+    const repo = this.getRepository(repoId);
+    if (!repo) return 0;
+    this.clearRepo(repo.path);
+    return this.db.prepare('DELETE FROM repositories WHERE id = ?').run(repoId).changes;
+  }
+
+  private rowToRepoMetadata(row: any): RepoMetadata {
+    return {
+      id: row.id,
+      path: row.path,
+      name: row.name,
+      sessionId: row.session_id,
+      sessionType: row.session_type || 'unknown',
+      createdAt: row.created_at,
+      lastAnalyzedAt: row.last_analyzed,
+      fileCount: row.file_count,
+      overallRating: row.overall_rating,
+      isActive: row.is_active === 1
+    };
   }
 
   close(): void {

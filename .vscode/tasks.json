@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Gate Keeper: Register Repo on Open (GitHub Copilot)",
+      "type": "shell",
+      "command": "echo \"{\\\"hook_event_name\\\":\\\"session_create\\\",\\\"tool_name\\\":\\\"vscode\\\",\\\"session_id\\\":\\\"copilot-$(date +%s)\\\",\\\"session_info\\\":{\\\"workspace_path\\\":\\\"${workspaceFolder}\\\",\\\"session_type\\\":\\\"github-copilot\\\"}}\" | node /home/mohantn/REPO/gate_keeper/dist/hook-receiver.js",
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "close": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Gate Keeper: Analyze Current File",
+      "type": "shell",
+      "command": "echo '{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${file}\"}}' | node /home/mohantn/REPO/gate_keeper/dist/hook-receiver.js",
+      "runOptions": {
+        "runOn": "default"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -57,19 +57,23 @@ export interface GraphData {
 }
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_complete' | 'repo_list' | 'repo_created';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
   error?: string;
   scanTotal?: number;
   scanAnalyzed?: number;
+  repos?: RepoMetadata[];
+  repo?: RepoMetadata;
+  currentRepo?: string;
 }
 
 export interface HookPayload {
   session_id?: string;
-  hook_event_name?: string;
+  hook_event_name?: 'PostToolUse' | 'PreToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'session_create' | string;
   tool_name: string;
+  cwd?: string;
   tool_input: {
     file_path?: string;
     path?: string;
@@ -93,4 +97,28 @@ export interface DaemonStatus {
 
 export interface Config {
   minRating: number;
+}
+
+export interface RepoMetadata {
+  id: string; // unique ID (e.g., path hash or UUID)
+  path: string;
+  name: string;
+  sessionId?: string;
+  sessionType: 'github-copilot' | 'claude' | 'unknown'; // which tool created it
+  createdAt: number;
+  lastAnalyzedAt?: number;
+  fileCount?: number;
+  overallRating?: number;
+  isActive?: boolean;
+}
+
+export interface SessionCreatePayload {
+  session_id: string;
+  hook_event_name: 'session_create';
+  tool_name: string;
+  session_info: {
+    workspace_path: string;
+    git_root?: string;
+    session_type: 'github-copilot' | 'claude';
+  };
 }

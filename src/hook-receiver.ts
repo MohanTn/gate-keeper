@@ -1,7 +1,8 @@
 /**
  * gate-keeper hook-receiver
  *
- * Called by Claude Code's PostToolUse hook on every Write/Edit operation.
+ * Called by Claude Code's PostToolUse hook on every Write/Edit operation,
+ * and also on session_create events to register new repos.
  * Waits for the daemon to finish analysis, then exits with code 2 (blocking
  * feedback) if the file rating falls below the configured minimum — forcing
  * Claude Code to surface the violations before the agent can continue.
@@ -11,7 +12,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, spawnSync } from 'child_process';
-import { FileAnalysis, HookPayload } from './types';
+import { FileAnalysis, HookPayload, SessionCreatePayload } from './types';
 
 interface AnalyzeResponse {
   analysis: FileAnalysis | null;
@@ -19,7 +20,9 @@ interface AnalyzeResponse {
 }
 
 const IPC_PORT = 5379;
-const PID_FILE = path.join(process.env.HOME ?? '/tmp', '.gate-keeper', 'daemon.pid');
+const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
+const PID_FILE = path.join(GK_DIR, 'daemon.pid');
+const SESSIONS_DIR = path.join(GK_DIR, 'sessions');
 const DAEMON_SCRIPT = path.join(__dirname, 'daemon.js');
 
 const WATCHED_EXTENSIONS = new Set(['.ts', '.tsx', '.jsx', '.js', '.cs']);
@@ -28,6 +31,58 @@ async function main(): Promise<void> {
   const payload = await readStdin();
   if (!payload) return;
 
+  // Handle session_create events (VS Code / GitHub Copilot task)
+  if (payload.hook_event_name === 'session_create') {
+    const sessionPayload = payload as any as SessionCreatePayload;
+    await ensureDaemonRunning();
+    await registerRepository(sessionPayload);
+    return;
+  }
+
+  // Handle Claude Code SessionStart — fires exactly once when a new session begins
+  if (payload.hook_event_name === 'SessionStart') {
+    const sessionId = payload.session_id;
+    const cwd = payload.cwd;
+    if (sessionId && cwd) {
+      await ensureDaemonRunning();
+      const gitRoot = findGitRoot(cwd);
+      await registerRepository({
+        session_id: sessionId,
+        hook_event_name: 'session_create',
+        tool_name: 'claude',
+        session_info: {
+          workspace_path: cwd,
+          git_root: gitRoot,
+          session_type: 'claude'
+        }
+      });
+    }
+    return;
+  }
+
+  // Handle Claude Code session start — fires on every user prompt, deduplicated by session_id
+  if (payload.hook_event_name === 'UserPromptSubmit') {
+    const sessionId = payload.session_id;
+    const cwd = payload.cwd;
+    if (sessionId && cwd && !isSessionRegistered(sessionId)) {
+      markSessionRegistered(sessionId);
+      await ensureDaemonRunning();
+      const gitRoot = findGitRoot(cwd);
+      await registerRepository({
+        session_id: sessionId,
+        hook_event_name: 'session_create',
+        tool_name: 'claude',
+        session_info: {
+          workspace_path: cwd,
+          git_root: gitRoot,
+          session_type: 'claude'
+        }
+      });
+    }
+    return;
+  }
+
+  // Handle file analysis on Write/Edit
   const filePath = payload.tool_input?.file_path ?? payload.tool_input?.path;
   if (!filePath) return;
 
@@ -99,6 +154,21 @@ function isDaemonAlive(): boolean {
   }
 }
 
+function isSessionRegistered(sessionId: string): boolean {
+  try {
+    return fs.existsSync(path.join(SESSIONS_DIR, sessionId));
+  } catch {
+    return false;
+  }
+}
+
+function markSessionRegistered(sessionId: string): void {
+  try {
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(SESSIONS_DIR, sessionId), String(Date.now()));
+  } catch {}
+}
+
 function findGitRoot(dir: string): string {
   const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: dir, encoding: 'utf8', timeout: 3000
@@ -142,6 +212,48 @@ function sendToDaemon(filePath: string): Promise<AnalyzeResponse | null> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
+}
+
+async function registerRepository(sessionPayload: SessionCreatePayload): Promise<void> {
+  const workspacePath = sessionPayload.session_info.workspace_path;
+  const gitRoot = sessionPayload.session_info.git_root || findGitRoot(workspacePath);
+  const sessionType = sessionPayload.session_info.session_type || 'unknown';
+
+  const body = JSON.stringify({
+    action: 'register_repo',
+    repo: {
+      path: gitRoot,
+      name: path.basename(gitRoot) || gitRoot,
+      sessionId: sessionPayload.session_id,
+      sessionType,
+      createdAt: Date.now()
+    }
+  });
+
+  return new Promise(resolve => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: IPC_PORT,
+        path: '/repo-register',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body)
+        }
+      },
+      res => {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', chunk => (data += chunk));
+        res.on('end', () => resolve());
+      }
+    );
+    req.on('error', () => resolve());
+    req.setTimeout(5000, () => { req.destroy(); resolve(); });
+    req.write(body);
+    req.end();
+  });
 }
 
 

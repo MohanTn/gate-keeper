@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GraphView } from './components/GraphView';
 import { Sidebar } from './components/Sidebar';
-import { GraphData, GraphNode, RepoInfo, WSMessage } from './types';
+import { GraphData, GraphNode, GraphEdge, RepoInfo, WSMessage } from './types';
 
-function mergeGraphData(prev: GraphData, delta: { nodes: GraphNode[]; edges: any[] }): GraphData {
+const edgeKey = (e: GraphEdge): string => {
+  const s = typeof e.source === 'string' ? e.source : e.source?.id;
+  const t = typeof e.target === 'string' ? e.target : e.target?.id;
+  return `${s}→${t}`;
+};
+
+function mergeGraphData(prev: GraphData, delta: { nodes: GraphNode[]; edges: GraphEdge[] }): GraphData {
   const nodeMap = new Map(prev.nodes.map(n => [n.id, n]));
   for (const n of delta.nodes) nodeMap.set(n.id, n);
-  const edgeKey = (e: any) => {
-    const s = typeof e.source === 'string' ? e.source : e.source?.id;
-    const t = typeof e.target === 'string' ? e.target : e.target?.id;
-    return `${s}→${t}`;
-  };
   const edgeMap = new Map(prev.edges.map(e => [edgeKey(e), e]));
   for (const e of delta.edges) edgeMap.set(edgeKey(e), e);
   return { nodes: Array.from(nodeMap.values()), edges: Array.from(edgeMap.values()) };
@@ -23,27 +24,18 @@ function ratingColor(r: number) {
   return '#ef4444';
 }
 
-export default function App() {
+// Custom hook: WebSocket connection & message handling
+function useWebSocketConnection(selectedRepo: string | null, onRepoCreated?: () => void) {
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], edges: [] });
-  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [wsStatus, setWsStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<{ analyzed: number; total: number } | null>(null);
-  const [lastScan, setLastScan] = useState<{ fileCount: number; ts: number } | null>(null);
 
-  const [repos, setRepos] = useState<RepoInfo[]>([]);
-  const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
-  const [showRepoSelector, setShowRepoSelector] = useState(false);
-
-  const scanningRef = useRef(false);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scanningRef = useRef(false);
   const analyzedRef = useRef(0);
-
-  const setScanningState = (v: boolean) => {
-    scanningRef.current = v;
-    setScanning(v);
-  };
+  const onRepoCreatedRef = useRef(onRepoCreated);
+  onRepoCreatedRef.current = onRepoCreated;
 
   const connect = useCallback((repo: string | null) => {
     if (wsRef.current) {
@@ -65,7 +57,7 @@ export default function App() {
 
     ws.onopen = () => setWsStatus('connected');
 
-    ws.onmessage = event => {
+    ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data) as WSMessage;
         if (msg.type === 'init' && msg.data) {
@@ -77,13 +69,14 @@ export default function App() {
             setScanProgress({ analyzed: analyzedRef.current, total: msg.scanTotal ?? 0 });
           }
         } else if (msg.type === 'scan_start') {
-          setScanningState(true);
+          scanningRef.current = true;
           analyzedRef.current = 0;
           setScanProgress({ analyzed: 0, total: msg.scanTotal ?? 0 });
         } else if (msg.type === 'scan_complete') {
-          setScanningState(false);
-          setLastScan({ fileCount: msg.scanAnalyzed ?? 0, ts: Date.now() });
+          scanningRef.current = false;
           setScanProgress(null);
+        } else if (msg.type === 'repo_created') {
+          onRepoCreatedRef.current?.();
         }
       } catch {}
     };
@@ -95,52 +88,130 @@ export default function App() {
     ws.onerror = () => ws.close();
   }, []);
 
-  // Fetch repos then decide: auto-select single or show picker
   useEffect(() => {
-    fetch('/api/repos')
-      .then(r => r.json())
-      .then((data: RepoInfo[]) => {
-        setRepos(data);
-        if (data.length === 1) {
-          setSelectedRepo(data[0].repoRoot);
-          connect(data[0].repoRoot);
-        } else if (data.length > 1) {
-          setShowRepoSelector(true);
-          connect(null); // show merged view while picking
-        } else {
-          connect(null); // no repos yet — real-time only
-        }
-      })
-      .catch(() => connect(null));
-
+    connect(selectedRepo);
     return () => {
       wsRef.current?.close();
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
     };
-  }, [connect]);
+  }, [selectedRepo, connect]);
 
-  const handleRepoSelect = (repo: string) => {
+  return { graphData, wsStatus, scanProgress, scanningRef };
+}
+
+// Custom hook: Repo selection logic
+function useRepoSelection() {
+  const [repos, setRepos] = useState<RepoInfo[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<string | null>(null);
+  const [showRepoSelector, setShowRepoSelector] = useState(false);
+  const initialLoadDone = useRef(false);
+
+  const loadRepos = useCallback(() => {
+    fetch('/api/repos')
+      .then(r => r.json())
+      .then((data: RepoInfo[]) => {
+        setRepos(data);
+        if (!initialLoadDone.current) {
+          initialLoadDone.current = true;
+          if (data.length === 1) {
+            setSelectedRepo(data[0].repoRoot);
+          } else if (data.length > 1) {
+            setShowRepoSelector(true);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => { loadRepos(); }, [loadRepos]);
+
+  const handleRepoSelect = useCallback((repo: string) => {
     setSelectedRepo(repo);
     setShowRepoSelector(false);
-    setGraphData({ nodes: [], edges: [] });
-    connect(repo);
-  };
+  }, []);
 
-  const handleScanAll = async () => {
+  return {
+    repos,
+    selectedRepo,
+    showRepoSelector,
+    setShowRepoSelector,
+    handleRepoSelect,
+    refreshRepos: loadRepos,
+  };
+}
+
+// Custom hook: Scan logic
+function useScan(wsStatus: 'connecting' | 'connected' | 'disconnected', scanningRef: React.MutableRefObject<boolean>) {
+  const [scanning, setScanning] = useState(false);
+  const [lastScan, setLastScan] = useState<{ fileCount: number; ts: number } | null>(null);
+
+  const handleScanAll = useCallback(async () => {
     if (scanningRef.current) return;
-    setScanningState(true);
-    setScanProgress({ analyzed: 0, total: 0 });
+    scanningRef.current = true;
+    setScanning(true);
     try {
       const res = await fetch('/api/scan', { method: 'POST' });
       if (!res.ok) {
-        setScanningState(false);
-        setScanProgress(null);
+        scanningRef.current = false;
+        setScanning(false);
       }
     } catch {
-      setScanningState(false);
-      setScanProgress(null);
+      scanningRef.current = false;
+      setScanning(false);
     }
+  }, [scanningRef]);
+
+  return { scanning, setScanning, lastScan, setLastScan, handleScanAll };
+}
+
+// Custom hook: Node selection handlers
+function useNodeHandlers() {
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+
+  const handlers = useCallback(
+    (action: 'clear' | 'select', node?: GraphNode) => {
+      if (action === 'clear') {
+        setSelectedNode(null);
+      } else if (action === 'select' && node) {
+        setSelectedNode(node);
+      }
+    },
+    []
+  );
+
+  return {
+    selectedNode,
+    handleClearSelection: () => handlers('clear'),
+    handleNodeSelect: (node: GraphNode) => handlers('select', node),
   };
+}
+
+export default function App() {
+  const {
+    repos,
+    selectedRepo,
+    showRepoSelector,
+    setShowRepoSelector,
+    handleRepoSelect,
+    refreshRepos,
+  } = useRepoSelection();
+
+  const { graphData, wsStatus, scanProgress, scanningRef } = useWebSocketConnection(selectedRepo, refreshRepos);
+  const { scanning, setScanning, lastScan, setLastScan, handleScanAll } = useScan(wsStatus, scanningRef);
+  const { selectedNode, handleClearSelection, handleNodeSelect } = useNodeHandlers();
+
+  // Listeners for WebSocket scan events
+  useEffect(() => {
+    const handleScanComplete = () => {
+      setScanning(false);
+      setLastScan({ fileCount: graphData.nodes.length, ts: Date.now() });
+    };
+    // This is handled via WSMessage, triggered when scan_complete is received
+  }, [graphData.nodes.length, setScanning, setLastScan]);
+
+  const handleShowRepoSelector = useCallback(() => {
+    setShowRepoSelector(true);
+  }, [setShowRepoSelector]);
 
   const totalViolations = graphData.nodes.reduce((a, n) => a + n.violations.length, 0);
   const errorCount = graphData.nodes.reduce(
@@ -154,6 +225,43 @@ export default function App() {
   const currentRepoLabel = selectedRepo
     ? (repos.find(r => r.repoRoot === selectedRepo)?.label ?? selectedRepo.split('/').pop())
     : null;
+
+  const handleClearData = useCallback(async () => {
+    if (!selectedRepo) {
+      alert('Please select a repository first');
+      return;
+    }
+
+    const repoLabel = selectedRepo
+      ? (repos.find(r => r.repoRoot === selectedRepo)?.label ?? selectedRepo.split('/').pop())
+      : null;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete all analysis data for "${repoLabel ?? 'this repo'}"? This cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch('/api/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: selectedRepo })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        alert(`Deleted ${data.deleted} analyses. The graph will refresh.`);
+        // Reload to refresh the dashboard
+        window.location.reload();
+      } else {
+        alert('Error clearing data');
+      }
+    } catch (e) {
+      console.error('Clear failed:', e);
+      alert('Error clearing data');
+    }
+  }, [selectedRepo, repos]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#0f172a', fontFamily: 'ui-monospace, "Cascadia Code", "SF Mono", monospace' }}>
@@ -178,7 +286,7 @@ export default function App() {
 
         {/* Repo selector button */}
         <button
-          onClick={() => setShowRepoSelector(true)}
+          onClick={handleShowRepoSelector}
           style={{
             display: 'flex', alignItems: 'center', gap: 6,
             background: '#1e293b', border: '1px solid #334155',
@@ -232,6 +340,23 @@ export default function App() {
           <span style={{ display: 'inline-block', animation: scanning ? 'spin 1s linear infinite' : 'none' }}>⟳</span>
           {scanning ? 'Scanning…' : 'Scan All Files'}
         </button>
+
+        <button
+          onClick={handleClearData}
+          disabled={!selectedRepo || wsStatus !== 'connected'}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: !selectedRepo ? '#1e293b' : '#7f1d1d',
+            border: `1px solid ${!selectedRepo ? '#334155' : '#991b1b'}`,
+            borderRadius: 6, color: !selectedRepo ? '#475569' : '#fee2e2',
+            cursor: !selectedRepo ? 'not-allowed' : 'pointer',
+            fontSize: 13, fontWeight: 600, padding: '6px 14px',
+            letterSpacing: 0.2, transition: 'all 0.15s'
+          }}
+        >
+          <span>🗑</span>
+          Clear Data
+        </button>
       </header>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
@@ -240,15 +365,15 @@ export default function App() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <GraphView
           graphData={graphData}
-          onNodeClick={setSelectedNode}
+          onNodeClick={handleNodeSelect}
           highlightNodeId={selectedNode?.id}
           selectedRepo={selectedRepo}
         />
         <Sidebar
           graphData={graphData}
           selectedNode={selectedNode}
-          onClearSelection={() => setSelectedNode(null)}
-          onNodeSelect={setSelectedNode}
+          onClearSelection={handleClearSelection}
+          onNodeSelect={handleNodeSelect}
         />
       </div>
 
@@ -258,7 +383,7 @@ export default function App() {
           repos={repos}
           selectedRepo={selectedRepo}
           onSelect={handleRepoSelect}
-          onClose={() => setShowRepoSelector(false)}
+          onClose={handleShowRepoSelector}
         />
       )}
     </div>
@@ -278,15 +403,28 @@ function StatPill({ label, value, color, bold }: {
   );
 }
 
-function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
+interface RepoSelectorModalProps {
   repos: RepoInfo[];
   selectedRepo: string | null;
   onSelect: (repo: string) => void;
   onClose: () => void;
-}) {
+}
+
+function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: RepoSelectorModalProps) {
+  const handleDomEvent = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.currentTarget === e.target) {
+        onClose();
+      } else {
+        e.stopPropagation();
+      }
+    },
+    [onClose]
+  );
+
   return (
     <div
-      onClick={onClose}
+      onClick={handleDomEvent}
       style={{
         position: 'fixed', inset: 0, zIndex: 100,
         background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
@@ -294,7 +432,7 @@ function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
       }}
     >
       <div
-        onClick={e => e.stopPropagation()}
+        onClick={handleDomEvent}
         style={{
           background: '#0f172a', border: '1px solid #1e293b',
           borderRadius: 12, padding: 24, minWidth: 360, maxWidth: 520,
@@ -310,29 +448,12 @@ function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {repos.map(r => (
-            <button
+            <RepoButton
               key={r.repoRoot}
-              onClick={() => onSelect(r.repoRoot)}
-              style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                background: selectedRepo === r.repoRoot ? '#1e3a5f' : '#0d1526',
-                border: `1px solid ${selectedRepo === r.repoRoot ? '#3b82f6' : '#1e293b'}`,
-                borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
-                color: '#f1f5f9', textAlign: 'left', transition: 'all 0.12s'
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', marginBottom: 2 }}>
-                  {r.label}
-                </div>
-                <div style={{ fontSize: 11, color: '#475569', fontFamily: 'monospace' }}>
-                  {r.repoRoot}
-                </div>
-              </div>
-              <div style={{ fontSize: 12, color: '#64748b', marginLeft: 16, whiteSpace: 'nowrap' }}>
-                {r.fileCount} file{r.fileCount !== 1 ? 's' : ''}
-              </div>
-            </button>
+              repo={r}
+              isSelected={selectedRepo === r.repoRoot}
+              onSelect={onSelect}
+            />
           ))}
         </div>
 
@@ -348,5 +469,53 @@ function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
         </button>
       </div>
     </div>
+  );
+}
+
+interface RepoButtonProps {
+  repo: RepoInfo;
+  isSelected: boolean;
+  onSelect: (repo: string) => void;
+}
+
+function RepoButton({ repo, isSelected, onSelect }: RepoButtonProps) {
+  const handleClick = useCallback(() => {
+    onSelect(repo.repoRoot);
+  }, [repo.repoRoot, onSelect]);
+
+  return (
+    <button
+      onClick={handleClick}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        background: isSelected ? '#1e3a5f' : '#0d1526',
+        border: `1px solid ${isSelected ? '#3b82f6' : '#1e293b'}`,
+        borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
+        color: '#f1f5f9', textAlign: 'left', transition: 'all 0.12s'
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0' }}>{repo.label}</span>
+          {repo.sessionType && repo.sessionType !== 'unknown' && (
+            <span style={{
+              fontSize: 10, fontWeight: 600, letterSpacing: 0.5,
+              padding: '1px 6px', borderRadius: 4,
+              background: repo.sessionType === 'claude' ? '#1e3a5f' : '#14532d',
+              color: repo.sessionType === 'claude' ? '#93c5fd' : '#86efac',
+              border: `1px solid ${repo.sessionType === 'claude' ? '#2563eb' : '#16a34a'}`
+            }}>
+              {repo.sessionType === 'claude' ? 'Claude' : 'Copilot'}
+            </span>
+          )}
+        </div>
+        <div style={{ fontSize: 11, color: '#475569', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {repo.repoRoot}
+        </div>
+      </div>
+      <div style={{ fontSize: 12, color: '#64748b', marginLeft: 16, whiteSpace: 'nowrap', flexShrink: 0 }}>
+        {repo.fileCount} file{repo.fileCount !== 1 ? 's' : ''}
+      </div>
+    </button>
   );
 }

@@ -86,9 +86,18 @@ function useGraphForces(
 
   const handleEngineStop = useCallback(() => {
     const fg = fgRef.current;
-    if (fg && !hasAutoFitted.current && nodeCount > 0) {
+    if (!fg) return;
+    if (!hasAutoFitted.current && nodeCount > 0) {
       fg.zoomToFit(400, 60);
       hasAutoFitted.current = true;
+    }
+    // Pin every node so force simulation can't pull them when a single node is dragged
+    const nodes = (fg as unknown as FGWithData).graphData().nodes;
+    for (const n of nodes) {
+      if (n.fx == null) {
+        n.fx = n.x;
+        n.fy = n.y;
+      }
     }
   }, [fgRef, nodeCount, hasAutoFitted]);
 
@@ -149,7 +158,18 @@ function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<
       const size = Math.max(5, (node.size ?? 1) * 6) + 6;
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(node.x!, node.y!, size, 0, 2 * Math.PI);
+      
+      const shape = langShape(node.type);
+      if (shape === 'square') {
+        ctx.rect(node.x! - size / 2, node.y! - size / 2, size, size);
+      } else if (shape === 'triangle') {
+        ctx.moveTo(node.x!, node.y! - size);
+        ctx.lineTo(node.x! + size * 0.866, node.y! + size * 0.5);
+        ctx.lineTo(node.x! - size * 0.866, node.y! + size * 0.5);
+        ctx.closePath();
+      } else {
+        ctx.arc(node.x!, node.y!, size, 0, 2 * Math.PI);
+      }
       ctx.fill();
     },
     []

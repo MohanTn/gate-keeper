@@ -10,11 +10,12 @@
 import express from 'express';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { spawnSync } from 'child_process';
 import { UniversalAnalyzer } from './analyzer/universal-analyzer';
 import { SqliteCache } from './cache/sqlite-cache';
 import { VizServer } from './viz/viz-server';
-import { Config, DaemonRequest } from './types';
+import { Config, DaemonRequest, RepoMetadata } from './types';
 
 const IPC_PORT = 5379;
 const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
@@ -73,6 +74,47 @@ async function main(): Promise<void> {
     res.json({ ok: true, pid: process.pid });
   });
 
+  // Register a new repository from session_create hook
+  ipc.post('/repo-register', async (req, res) => {
+    const { action, repo } = req.body as { action: string; repo: any };
+
+    if (action !== 'register_repo' || !repo?.path) {
+      res.status(400).json({ error: 'Invalid request' });
+      return;
+    }
+
+    try {
+      const repoId = crypto.createHash('md5').update(repo.path).digest('hex');
+      const isNew = !cache.getRepository(repoId);
+      const metadata: RepoMetadata = {
+        id: repoId,
+        path: repo.path,
+        name: repo.name || path.basename(repo.path) || repo.path,
+        sessionId: repo.sessionId,
+        sessionType: repo.sessionType || 'unknown',
+        createdAt: repo.createdAt || Date.now(),
+        isActive: true
+      };
+
+      cache.saveRepository(metadata);
+      vizServer.broadcastRepoCreated(metadata);
+
+      console.error(`[gate-keeper] Repository ${isNew ? 'registered' : 'updated'}: ${metadata.name} (${metadata.id})`);
+
+      if (isNew) {
+        vizServer.scanRepo(metadata.path).catch(err => {
+          console.error(`[gate-keeper] Initial scan failed for ${metadata.name}: ${err instanceof Error ? err.message : err}`);
+        });
+      }
+
+      res.json({ ok: true, repoId, repo: metadata, isNew });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[gate-keeper] Repo registration error: ${msg}`);
+      res.status(500).json({ error: msg });
+    }
+  });
+
   // Synchronously analyzes the file and returns the result so the hook-receiver
   // can gate on the rating in the same PostToolUse event.
   ipc.post('/analyze', async (req, res) => {
@@ -103,6 +145,12 @@ async function main(): Promise<void> {
       console.error(`[gate-keeper] Analysis error for ${filePath}: ${msg}`);
       res.json({ analysis: null, minRating: loadConfig().minRating });
     }
+  });
+
+  // Get list of repositories
+  ipc.get('/repos', (_req, res) => {
+    const repos = cache.getAllRepositories(true);
+    res.json({ repos });
   });
 
   ipc.listen(IPC_PORT, '127.0.0.1', () => {
