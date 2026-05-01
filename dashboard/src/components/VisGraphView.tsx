@@ -22,113 +22,146 @@ interface VisGraphViewProps {
   fitTrigger?: number;
 }
 
-// ── Custom hook: all vis-network refs + effects ─────────────
-function useVisNetworkSync(params: VisGraphViewProps) {
-  const { T } = useTheme();
+// ── Vis-Network Data Types ─────────────────────────────────
+interface VisNodeData {
+  id: string;
+  x?: number;
+  y?: number;
+  color?: {
+    background: string;
+    border: string;
+    highlight?: { background: string; border: string };
+    hover?: { background: string; border: string };
+  };
+  borderWidth?: number;
+  physics?: boolean;
+  font?: { color: string; size: number; face: string };
+}
+
+interface VisEdgeData {
+  id: string;
+  color?: { color: string; highlight: string };
+  width?: number;
+  _isCircular?: boolean;
+}
+
+interface NetworkRefs {
+  containerRef: React.RefObject<HTMLDivElement>;
+  networkRef: React.RefObject<Network | undefined>;
+  nodesDS: React.RefObject<DataSet<VisNodeData>>;
+  edgesDS: React.RefObject<DataSet<VisEdgeData>>;
+  pinnedRef: React.RefObject<Map<string, { x: number; y: number }>>;
+  treePositionsRef: React.RefObject<Map<string, { x: number; y: number }>>;
+}
+
+// ── Setup shared refs ──────────────────────────────────────
+function useNetworkRefs(params: VisGraphViewProps): NetworkRefs {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | undefined>(undefined);
-  const nodesDS = useRef(new DataSet<Record<string, unknown>>());
-  const edgesDS = useRef(new DataSet<Record<string, unknown>>());
+  const nodesDS = useRef(new DataSet<VisNodeData>());
+  const edgesDS = useRef(new DataSet<VisEdgeData>());
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const treePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
 
-  // Stable refs for callbacks used inside vis-network event handlers
-  const graphDataRef = useRef(params.graphData);
-  graphDataRef.current = params.graphData;
-  const onNodeClickRef = useRef(params.onNodeClick);
-  onNodeClickRef.current = params.onNodeClick;
-  const onCanvasClickRef = useRef(params.onCanvasClick);
-  onCanvasClickRef.current = params.onCanvasClick;
-  const selectedRepoRef = useRef(params.selectedRepo);
-  selectedRepoRef.current = params.selectedRepo;
-
-  // ── Load stored positions ────────────────────────────────
+  // Update stable callback refs when props change
   useEffect(() => {
-    if (!params.selectedRepo) { pinnedRef.current.clear(); return; }
-    fetch(`/api/positions?repo=${encodeURIComponent(params.selectedRepo)}`)
+    const graphDataRef = useRef(params.graphData);
+    const onNodeClickRef = useRef(params.onNodeClick);
+    const onCanvasClickRef = useRef(params.onCanvasClick);
+    const selectedRepoRef = useRef(params.selectedRepo);
+    graphDataRef.current = params.graphData;
+    onNodeClickRef.current = params.onNodeClick;
+    onCanvasClickRef.current = params.onCanvasClick;
+    selectedRepoRef.current = params.selectedRepo;
+  }, [params.graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
+
+  return { containerRef, networkRef, nodesDS, edgesDS, pinnedRef, treePositionsRef };
+}
+
+// ── Load and persist positions ──────────────────────────────
+function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) {
+  useEffect(() => {
+    if (!selectedRepo) { refs.pinnedRef.current.clear(); return; }
+    fetch(`/api/positions?repo=${encodeURIComponent(selectedRepo)}`)
       .then(r => r.json())
       .then((data: Array<{ nodeId: string; x: number; y: number }>) => {
-        pinnedRef.current = new Map(data.map(p => [p.nodeId, { x: p.x, y: p.y }]));
+        refs.pinnedRef.current = new Map(data.map(p => [p.nodeId, { x: p.x, y: p.y }]));
       })
       .catch(() => { });
-  }, [params.selectedRepo]);
+  }, [selectedRepo, refs.pinnedRef]);
 
-  // ── Large-graph threshold ─────────────────────────────────
+}
+
+// ── Sync node updates ──────────────────────────────────────
+function useSyncNodes(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T'], fitTrigger?: number) {
   const LARGE_GRAPH_THRESHOLD = 200;
 
-  // ── Sync nodes ───────────────────────────────────────────
   useEffect(() => {
-    const isLarge = params.graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
-    treePositionsRef.current = isLarge
-      ? new Map()   // skip expensive layout for large graphs
-      : computeHierarchicalPositions(params.graphData.nodes, params.graphData.edges);
+    const isLarge = graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
+    refs.treePositionsRef.current = isLarge
+      ? new Map()
+      : computeHierarchicalPositions(graphData.nodes, graphData.edges);
 
-    const visNodes = buildVisNodes(params.graphData.nodes, pinnedRef.current, treePositionsRef.current, T);
-    const currentIds = new Set(nodesDS.current.getIds() as string[]);
+    const visNodes = buildVisNodes(graphData.nodes, refs.pinnedRef.current, refs.treePositionsRef.current, T);
+    const currentIds = new Set(refs.nodesDS.current.getIds() as string[]);
     const newIds = new Set(visNodes.map(n => n.id as string));
 
-    // Full rebuild is cheaper than per-node diff for large datasets
     if (isLarge || currentIds.size === 0) {
-      nodesDS.current.clear();
-      nodesDS.current.add(visNodes);
+      refs.nodesDS.current.clear();
+      refs.nodesDS.current.add(visNodes);
     } else {
       for (const id of currentIds) {
-        if (!newIds.has(id)) { nodesDS.current.remove(id); pinnedRef.current.delete(id); }
+        if (!newIds.has(id)) { refs.nodesDS.current.remove(id); refs.pinnedRef.current.delete(id); }
       }
       for (const vn of visNodes) {
-        const existing = nodesDS.current.get(vn.id as string);
-        if (existing && pinnedRef.current.has(vn.id as string)) {
-          nodesDS.current.update({ ...vn, x: existing.x, y: existing.y });
+        const existing = refs.nodesDS.current.get(vn.id);
+        if (existing && refs.pinnedRef.current.has(vn.id)) {
+          refs.nodesDS.current.update({ ...vn, x: existing.x, y: existing.y });
         } else {
-          nodesDS.current.update(vn);
+          refs.nodesDS.current.update(vn);
         }
       }
     }
 
     setTimeout(() => {
-      networkRef.current?.fit({
+      refs.networkRef.current?.fit({
         animation: { duration: 400, easingFunction: 'easeInOutQuad' },
         maxZoomLevel: 1.2,
         minZoomLevel: 0.15,
       });
     }, 100);
-  }, [params.graphData.nodes, params.graphData.edges, T]);
+  }, [graphData.nodes, graphData.edges, T, refs]);
+}
 
-  // ── Sync edges ───────────────────────────────────────────
+// ── Sync edge updates ──────────────────────────────────────
+function useSyncEdges(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T']) {
   useEffect(() => {
-    edgesDS.current.clear();
-    edgesDS.current.add(buildVisEdges(params.graphData, T));
-  }, [params.graphData.edges, T]);
+    refs.edgesDS.current.clear();
+    refs.edgesDS.current.add(buildVisEdges(graphData, T));
+  }, [graphData.edges, T, refs]);
 
-  // External fit trigger when side panels open/close.
-  useEffect(() => {
-    if (!networkRef.current) return;
-    networkRef.current.fit({
-      animation: { duration: 250, easingFunction: 'easeInOutQuad' },
-      maxZoomLevel: 1.2,
-      minZoomLevel: 0.15,
-    });
-  }, [params.fitTrigger]);
+}
 
-  // ── Focus on a node (from search or file list) ──────────
+// ── Focus and highlight node selection
+function useNodeSelection(refs: NetworkRefs, graphData: GraphData, focusNodeId: string | null | undefined, highlightNodeId: string | undefined, T: ReturnType<typeof useTheme>['T']) {
   useEffect(() => {
-    if (!networkRef.current || !params.focusNodeId) return;
-    networkRef.current.selectNodes([params.focusNodeId], false);
-    networkRef.current.focus(params.focusNodeId, {
+    if (!refs.networkRef.current || !focusNodeId) return;
+    refs.networkRef.current.selectNodes([focusNodeId], false);
+    refs.networkRef.current.focus(focusNodeId, {
       scale: 0.9,
       animation: { duration: 400, easingFunction: 'easeInOutQuad' },
     });
-  }, [params.focusNodeId]);
+  }, [focusNodeId, refs]);
 
-  // ── Highlight selected node border ──────────────────────
   useEffect(() => {
-    if (!params.highlightNodeId) return;
-    const gn = params.graphData.nodes.find(n => n.id === params.highlightNodeId);
+    if (!highlightNodeId) return;
+    const gn = graphData.nodes.find(n => n.id === highlightNodeId);
     if (gn) {
-      nodesDS.current.update({
-        id: params.highlightNodeId,
+      refs.nodesDS.current.update({
+        id: highlightNodeId,
         color: {
-          background: T.cardBgHover, border: T.accent,
+          background: T.cardBgHover,
+          border: T.accent,
           highlight: { background: T.cardBgHover, border: T.accent },
           hover: { background: T.cardBgHover, border: T.accent }
         },
@@ -137,22 +170,36 @@ function useVisNetworkSync(params: VisGraphViewProps) {
     }
     return () => {
       if (gn) {
-        nodesDS.current.update({
-          id: params.highlightNodeId,
+        refs.nodesDS.current.update({
+          id: highlightNodeId,
           color: makeNodeColor(healthColor(gn.rating, T)),
           borderWidth: 2,
         });
       }
     };
-  }, [params.highlightNodeId, params.graphData.nodes]);
+  }, [highlightNodeId, graphData.nodes, T, refs]);
+}
 
-  // ── Initialize network (once) ───────────────────────────
+// ── Initialize network instance ────────────────────────────
+function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T']) {
+  const graphDataRef = useRef(graphData);
+  const onNodeClickRef = useRef(params.onNodeClick);
+  const onCanvasClickRef = useRef(params.onCanvasClick);
+  const selectedRepoRef = useRef(params.selectedRepo);
+
   useEffect(() => {
-    if (!containerRef.current || networkRef.current) return;
+    graphDataRef.current = graphData;
+    onNodeClickRef.current = params.onNodeClick;
+    onCanvasClickRef.current = params.onCanvasClick;
+    selectedRepoRef.current = params.selectedRepo;
+  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
 
-    const network = new Network(containerRef.current, {
-      nodes: nodesDS.current,
-      edges: edgesDS.current,
+  useEffect(() => {
+    if (!refs.containerRef.current || refs.networkRef.current) return;
+
+    const network = new Network(refs.containerRef.current, {
+      nodes: refs.nodesDS.current,
+      edges: refs.edgesDS.current,
     }, {
       physics: { enabled: false },
       interaction: {
@@ -187,9 +234,8 @@ function useVisNetworkSync(params: VisGraphViewProps) {
       },
     });
 
-    networkRef.current = network;
+    refs.networkRef.current = network;
 
-    // ── HOVER HIGHLIGHTING ─────────────────────────────────
     let lastHoverUpdatedIds: string[] = [];
     let lastHoverEdgeIds: string[] = [];
 
@@ -200,11 +246,69 @@ function useVisNetworkSync(params: VisGraphViewProps) {
       const connectedEdgeIds = network.getConnectedEdges(nodeId) as string[];
 
       if (isLargeGraph) {
-        // Large graph: only highlight connected nodes, don't dim the rest
-        const touchedIds = [nodeId, ...connectedNodeIds];
-        const nodeUpdates = touchedIds.map(id => {
-          const gn = graphDataRef.current.nodes.find(g => g.id === id);
-          const baseColor = healthColor(gn?.rating ?? 5, T);
+        handleLargeGraphHover(nodeId, connectedNodeIds, connectedEdgeIds);
+      } else {
+        handleSmallGraphHover(nodeId, connectedNodeIds, connectedEdgeIds);
+      }
+    });
+
+    network.on('blurNode', restoreStyles);
+    network.on('click', handleNetworkClick);
+    network.on('dragEnd', handleNodeDragEnd);
+
+    const fitTimer = setTimeout(() => {
+      try {
+        refs.networkRef.current?.fit({
+          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
+          maxZoomLevel: 1.2,
+          minZoomLevel: 0.15,
+        });
+      } catch { }
+    }, 200);
+
+    function handleLargeGraphHover(nodeId: string, connectedNodeIds: string[], connectedEdgeIds: string[]) {
+      const touchedIds = [nodeId, ...connectedNodeIds];
+      const nodeUpdates = touchedIds.map(id => {
+        const gn = graphDataRef.current.nodes.find(g => g.id === id);
+        const baseColor = healthColor(gn?.rating ?? 5, T);
+        return {
+          id,
+          color: {
+            background: id === nodeId ? T.cardBgHover : T.cardBg,
+            border: id === nodeId ? T.accent : baseColor,
+            highlight: { background: T.cardBgHover, border: T.accent },
+            hover: { background: T.cardBgHover, border: baseColor },
+          },
+          borderWidth: id === nodeId ? 3 : 2,
+        };
+      });
+      refs.nodesDS.current.update(nodeUpdates);
+
+      const edgeUpdates = connectedEdgeIds.map(id => {
+        const e = refs.edgesDS.current.get(id);
+        const isCirc = e?._isCircular;
+        return {
+          id,
+          color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
+          width: 2.5,
+        };
+      });
+      refs.edgesDS.current.update(edgeUpdates);
+
+      lastHoverUpdatedIds = touchedIds;
+      lastHoverEdgeIds = connectedEdgeIds;
+    }
+
+    function handleSmallGraphHover(nodeId: string, connectedNodeIds: string[], connectedEdgeIds: string[]) {
+      const connectedSet = new Set(connectedNodeIds);
+      connectedSet.add(nodeId);
+      const connectedEdgeSet = new Set(connectedEdgeIds);
+
+      const allNodeIds = refs.nodesDS.current.getIds() as string[];
+      const nodeUpdates = allNodeIds.map(id => {
+        const gn = graphDataRef.current.nodes.find(g => g.id === id);
+        const baseColor = healthColor(gn?.rating ?? 5, T);
+        if (connectedSet.has(id)) {
           return {
             id,
             color: {
@@ -213,102 +317,59 @@ function useVisNetworkSync(params: VisGraphViewProps) {
               highlight: { background: T.cardBgHover, border: T.accent },
               hover: { background: T.cardBgHover, border: baseColor },
             },
+            font: { color: T.text, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
             borderWidth: id === nodeId ? 3 : 2,
           };
-        });
-        nodesDS.current.update(nodeUpdates);
+        }
+        return {
+          id,
+          color: {
+            background: T.elevated,
+            border: T.border,
+            highlight: { background: T.cardBgHover, border: T.accent },
+            hover: { background: T.cardBgHover, border: T.borderBright },
+          },
+          font: { color: T.textFaint, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
+          borderWidth: 1,
+        };
+      });
+      refs.nodesDS.current.update(nodeUpdates);
 
-        const edgeUpdates = connectedEdgeIds.map(id => {
-          const e = edgesDS.current.get(id);
+      const allEdgeIds = refs.edgesDS.current.getIds() as string[];
+      const edgeUpdates = allEdgeIds.map(id => {
+        if (connectedEdgeSet.has(id)) {
+          const e = refs.edgesDS.current.get(id);
           const isCirc = e?._isCircular;
           return {
             id,
             color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
             width: 2.5,
           };
-        });
-        edgesDS.current.update(edgeUpdates);
-
-        lastHoverUpdatedIds = touchedIds;
-        lastHoverEdgeIds = connectedEdgeIds;
-      } else {
-        // Small graph: full dim-all / highlight-connected pattern
-        const connectedSet = new Set(connectedNodeIds);
-        connectedSet.add(nodeId);
-        const connectedEdgeSet = new Set(connectedEdgeIds);
-
-        const allNodeIds = nodesDS.current.getIds() as string[];
-        const nodeUpdates = allNodeIds.map(id => {
-          const gn = graphDataRef.current.nodes.find(g => g.id === id);
-          const baseColor = healthColor(gn?.rating ?? 5, T);
-          if (connectedSet.has(id)) {
-            return {
-              id,
-              color: {
-                background: id === nodeId ? T.cardBgHover : T.cardBg,
-                border: id === nodeId ? T.accent : baseColor,
-                highlight: { background: T.cardBgHover, border: T.accent },
-                hover: { background: T.cardBgHover, border: baseColor },
-              },
-              font: { color: T.text, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
-              borderWidth: id === nodeId ? 3 : 2,
-            };
-          }
-          return {
-            id,
-            color: {
-              background: T.elevated,
-              border: T.border,
-              highlight: { background: T.cardBgHover, border: T.accent },
-              hover: { background: T.cardBgHover, border: T.borderBright },
-            },
-            font: { color: T.textFaint, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
-            borderWidth: 1,
-          };
-        });
-        nodesDS.current.update(nodeUpdates);
-
-        const allEdgeIds = edgesDS.current.getIds() as string[];
-        const edgeUpdates = allEdgeIds.map(id => {
-          if (connectedEdgeSet.has(id)) {
-            const e = edgesDS.current.get(id);
-            const isCirc = e?._isCircular;
-            return {
-              id,
-              color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
-              width: 2.5,
-            };
-          }
-          return {
-            id,
-            color: { color: T.edgeDim, highlight: T.edgeDim },
-            width: 0.5,
-          };
-        });
-        edgesDS.current.update(edgeUpdates);
-        lastHoverUpdatedIds = allNodeIds;
-        lastHoverEdgeIds = allEdgeIds;
-      }
-    });
-
-    network.on('blurNode', () => {
-      restoreStyles();
-    });
+        }
+        return {
+          id,
+          color: { color: T.edgeDim, highlight: T.edgeDim },
+          width: 0.5,
+        };
+      });
+      refs.edgesDS.current.update(edgeUpdates);
+      lastHoverUpdatedIds = allNodeIds;
+      lastHoverEdgeIds = allEdgeIds;
+    }
 
     function restoreStyles() {
       const isLargeGraph = graphDataRef.current.nodes.length > 200;
 
       if (isLargeGraph && lastHoverUpdatedIds.length > 0) {
-        // Only restore nodes/edges that were actually changed
         const nodeUpdates = lastHoverUpdatedIds.map(id => {
           const gn = graphDataRef.current.nodes.find(g => g.id === id);
           const color = healthColor(gn?.rating ?? 5, T);
           return { id, color: makeNodeColor(color), borderWidth: 2 };
         });
-        nodesDS.current.update(nodeUpdates);
+        refs.nodesDS.current.update(nodeUpdates);
 
         const edgeUpdates = lastHoverEdgeIds.map(id => {
-          const e = edgesDS.current.get(id);
+          const e = refs.edgesDS.current.get(id);
           const isCirc = e?._isCircular;
           return {
             id,
@@ -319,12 +380,11 @@ function useVisNetworkSync(params: VisGraphViewProps) {
             width: isCirc ? 2.5 : 2,
           };
         });
-        edgesDS.current.update(edgeUpdates);
+        refs.edgesDS.current.update(edgeUpdates);
         lastHoverUpdatedIds = [];
         lastHoverEdgeIds = [];
       } else {
-        // Small graph: full restore
-        const allNodeIds = nodesDS.current.getIds() as string[];
+        const allNodeIds = refs.nodesDS.current.getIds() as string[];
         const nodeUpdates = allNodeIds.map(id => {
           const gn = graphDataRef.current.nodes.find(g => g.id === id);
           const color = healthColor(gn?.rating ?? 5, T);
@@ -335,14 +395,14 @@ function useVisNetworkSync(params: VisGraphViewProps) {
             borderWidth: 2,
           };
         });
-        nodesDS.current.update(nodeUpdates);
+        refs.nodesDS.current.update(nodeUpdates);
 
-        edgesDS.current.clear();
-        edgesDS.current.add(buildVisEdges(graphDataRef.current, T));
+        refs.edgesDS.current.clear();
+        refs.edgesDS.current.add(buildVisEdges(graphDataRef.current, T));
       }
     }
 
-    network.on('click', (clickParams: { nodes: string[] }) => {
+    function handleNetworkClick(clickParams: { nodes: string[] }) {
       if (clickParams.nodes.length > 0) {
         const nodeId = clickParams.nodes[0];
         const gn = graphDataRef.current.nodes.find(n => n.id === nodeId);
@@ -350,15 +410,15 @@ function useVisNetworkSync(params: VisGraphViewProps) {
       } else {
         onCanvasClickRef.current();
       }
-    });
+    }
 
-    network.on('dragEnd', (dragParams: { nodes: string[] }) => {
+    function handleNodeDragEnd(dragParams: { nodes: string[] }) {
       for (const nodeId of dragParams.nodes) {
-        const node = nodesDS.current.get(nodeId);
+        const node = refs.nodesDS.current.get(nodeId);
         if (!node) continue;
         const pos = { x: node.x as number, y: node.y as number };
-        pinnedRef.current.set(nodeId, pos);
-        nodesDS.current.update({ id: nodeId, physics: false });
+        refs.pinnedRef.current.set(nodeId, pos);
+        refs.nodesDS.current.update({ id: nodeId, physics: false });
 
         if (selectedRepoRef.current) {
           fetch('/api/positions', {
@@ -368,40 +428,33 @@ function useVisNetworkSync(params: VisGraphViewProps) {
           }).catch(() => { });
         }
       }
-    });
-
-    const fitTimer = setTimeout(() => {
-      try {
-        networkRef.current?.fit({
-          animation: { duration: 500, easingFunction: 'easeInOutQuad' },
-          maxZoomLevel: 1.2,
-          minZoomLevel: 0.15,
-        });
-      } catch { }
-    }, 200);
+    }
 
     return () => {
       clearTimeout(fitTimer);
       network.destroy();
-      networkRef.current = undefined;
+      refs.networkRef.current = undefined;
     };
-  }, []);
+  }, [T, refs, graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
+}
 
-  function handleZoomIn() {
-    const net = networkRef.current; if (!net) return;
-    const s = net.getScale(); const p = net.getViewPosition();
-    net.moveTo({ position: p, scale: s * 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
-  }
-  function handleZoomOut() {
-    const net = networkRef.current; if (!net) return;
-    const s = net.getScale(); const p = net.getViewPosition();
-    net.moveTo({ position: p, scale: s * 0.77, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
-  }
-  function handleFitView() {
-    networkRef.current?.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' }, maxZoomLevel: 1 });
-  }
-
-  return { containerRef, handleZoomIn, handleZoomOut, handleFitView };
+// ── Zoom helper functions ──────────────────────────────────
+function createZoomHandlers(networkRef: React.RefObject<Network | undefined>) {
+  return {
+    handleZoomIn() {
+      const net = networkRef.current; if (!net) return;
+      const s = net.getScale(); const p = net.getViewPosition();
+      net.moveTo({ position: p, scale: s * 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+    },
+    handleZoomOut() {
+      const net = networkRef.current; if (!net) return;
+      const s = net.getScale(); const p = net.getViewPosition();
+      net.moveTo({ position: p, scale: s * 0.77, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+    },
+    handleFitView() {
+      networkRef.current?.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' }, maxZoomLevel: 1 });
+    }
+  };
 }
 
 // ── Component ──────────────────────────────────────────────
@@ -416,9 +469,15 @@ export function VisGraphView({
   fitTrigger,
 }: VisGraphViewProps) {
   const { T } = useTheme();
-  const { containerRef, handleZoomIn, handleZoomOut, handleFitView } = useVisNetworkSync({
-    graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger,
-  });
+  const refs = useNetworkRefs({ graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger });
+
+  usePositionPersistence(refs, selectedRepo);
+  useSyncNodes(refs, graphData, T, fitTrigger);
+  useSyncEdges(refs, graphData, T);
+  useNodeSelection(refs, graphData, focusNodeId, highlightNodeId, T);
+  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger }, T);
+
+  const { handleZoomIn, handleZoomOut, handleFitView } = createZoomHandlers(refs.networkRef);
 
   return (
     <div style={{ flex: 1, position: 'relative', background: T.bg, overflow: 'hidden' }}>

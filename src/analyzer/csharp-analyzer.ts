@@ -209,8 +209,54 @@ export class CSharpAnalyzer {
     this.detectTightCoupling(content, lines, violations);
     this.detectMagicNumbers(content, lines, violations);
     this.detectEmptyCatch(content, lines, violations);
+    this.detectTodoPlaceholders(lines, violations);
 
     return violations;
+  }
+
+  private detectTodoPlaceholders(lines: string[], violations: Violation[]): void {
+    const incompletePattern = /(?:\/\/|\/\*)\s*(TODO|FIXME|PLACEHOLDER|STUB)\b/i;
+    const debtPattern       = /(?:\/\/|\/\*)\s*(HACK|WORKAROUND|KLUDGE|XXX)\b/i;
+    const notImplPattern    = /throw\s+new\s+NotImplementedException\s*\(/;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNum = i + 1;
+
+      const incompleteMatch = incompletePattern.exec(line);
+      if (incompleteMatch) {
+        violations.push({
+          type: 'todo_placeholder',
+          severity: 'warning',
+          message: `${incompleteMatch[1].toUpperCase()} marker at line ${lineNum} — resolve before merging`,
+          line: lineNum,
+          fix: 'Replace with the actual implementation'
+        });
+        continue;
+      }
+
+      const debtMatch = debtPattern.exec(line);
+      if (debtMatch) {
+        violations.push({
+          type: 'tech_debt_marker',
+          severity: 'info',
+          message: `${debtMatch[1].toUpperCase()} marker at line ${lineNum} — track in your issue tracker`,
+          line: lineNum,
+          fix: 'Create a tracking issue and replace with a proper solution'
+        });
+        continue;
+      }
+
+      if (notImplPattern.test(line)) {
+        violations.push({
+          type: 'unimplemented_stub',
+          severity: 'error',
+          message: `Unimplemented stub at line ${lineNum} — NotImplementedException will throw at runtime`,
+          line: lineNum,
+          fix: 'Implement the required functionality'
+        });
+      }
+    }
   }
 
   private detectGodClass(content: string, lines: string[], violations: Violation[]): void {

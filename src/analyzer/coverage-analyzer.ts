@@ -16,7 +16,8 @@ export interface FileCoverage {
 }
 
 export interface CoverageResult {
-    coveragePercent: number;
+    /** undefined when coverage was not measured (no test file, hollow test, etc.) */
+    coveragePercent?: number;
     uncoveredLines: number[];
     violations: Violation[];
 }
@@ -77,7 +78,7 @@ export class CoverageAnalyzer {
         const testFile = this.findTestFile(filePath, projectRoot);
         if (!testFile) {
             return {
-                coveragePercent: 0,
+                coveragePercent: undefined,
                 uncoveredLines: [],
                 violations: [
                     {
@@ -90,7 +91,23 @@ export class CoverageAnalyzer {
             };
         }
 
-        // 3. Test file found — run coverage for this file on the fly
+        // 3. Test file found — verify it contains real tests before running coverage
+        if (!this.hasRealTestContent(testFile)) {
+            return {
+                coveragePercent: undefined,
+                uncoveredLines: [],
+                violations: [
+                    {
+                        type: 'hollow_test_file',
+                        severity: 'error',
+                        message: `Test file exists but contains no real test cases — ${path.basename(testFile)} is an empty shell`,
+                        fix: 'Add at least one it() / test() / describe() block with assertions',
+                    },
+                ],
+            };
+        }
+
+        // 4. Real test file found — run coverage for this file on the fly
         return this.runCoverageForFile(filePath, testFile, projectRoot);
     }
 
@@ -512,6 +529,46 @@ export class CoverageAnalyzer {
         const ext = path.extname(filePath);
         const baseName = path.basename(filePath, ext);
         return `${baseName}.test${ext}`;
+    }
+
+    /**
+     * Returns true if a test file contains at least one real test assertion or
+     * test-framework call. Catches empty/placeholder test files that would
+     * otherwise satisfy the "test file exists" check without actually testing anything.
+     */
+    private hasRealTestContent(testFilePath: string): boolean {
+        try {
+            const content = fs.readFileSync(testFilePath, 'utf8');
+
+            // TypeScript / JavaScript test patterns
+            const jsTestPatterns = [
+                /\bit\s*\(/,         // it('...')
+                /\btest\s*\(/,       // test('...')
+                /\bdescribe\s*\(/,   // describe('...')
+                /\bexpect\s*\(/,     // expect(...)
+                /\bassert\./,        // assert.equal / assert.ok / etc.
+                /\bshould\./,        // chai .should chains
+                /\bsuiteTest\s*\(/,
+                /\bspecify\s*\(/,
+            ];
+
+            // C# xUnit / NUnit / MSTest attributes and Assert calls
+            const csharpTestPatterns = [
+                /\[Test\]/,
+                /\[TestMethod\]/,
+                /\[Fact\]/,
+                /\[Theory\]/,
+                /\[DataTestMethod\]/,
+                /\bAssert\./,
+                /\bShould\./,
+            ];
+
+            const allPatterns = [...jsTestPatterns, ...csharpTestPatterns];
+            return allPatterns.some(p => p.test(content));
+        } catch {
+            // If we can't read the file, assume it's real to avoid false positives
+            return true;
+        }
     }
 
     /** Clear the coverage cache (e.g., when coverage files are regenerated). */

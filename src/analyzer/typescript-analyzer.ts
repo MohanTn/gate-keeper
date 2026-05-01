@@ -34,6 +34,8 @@ export class TypeScriptAnalyzer {
       ? this.detectReactViolations(sourceFile)
       : this.detectTypeScriptViolations(sourceFile);
 
+    violations.push(...this.detectTodoPlaceholders(content));
+
     return { dependencies, metrics, violations };
   }
 
@@ -359,5 +361,64 @@ export class TypeScriptAnalyzer {
 
   private startsWithUpperCase(name: string): boolean {
     return name.length > 0 && name[0] >= 'A' && name[0] <= 'Z';
+  }
+
+  /**
+   * Scans raw source text for TODO/FIXME/PLACEHOLDER markers and unimplemented
+   * throw stubs. These represent incomplete work that should not pass quality gates.
+   *
+   * Severity tiers:
+   *   error   — throw new Error('Not implemented') — will crash at runtime
+   *   warning — TODO / FIXME / PLACEHOLDER / STUB  — incomplete work
+   *   info    — HACK / WORKAROUND / KLUDGE          — tracked technical debt
+   */
+  private detectTodoPlaceholders(content: string): Violation[] {
+    const violations: Violation[] = [];
+    const lines = content.split('\n');
+
+    const incompletePattern = /(?:\/\/|\/\*)\s*(TODO|FIXME|PLACEHOLDER|STUB)\b/i;
+    const debtPattern       = /(?:\/\/|\/\*)\s*(HACK|WORKAROUND|KLUDGE|XXX)\b/i;
+    const notImplPattern    = /throw\s+new\s+(?:Error|TypeError|RangeError)\s*\(\s*['"`](?:not\s+implemented|todo|placeholder|stub)/i;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNum = i + 1;
+
+      const incompleteMatch = incompletePattern.exec(line);
+      if (incompleteMatch) {
+        violations.push({
+          type: 'todo_placeholder',
+          severity: 'warning',
+          message: `${incompleteMatch[1].toUpperCase()} marker at line ${lineNum} — resolve before merging`,
+          line: lineNum,
+          fix: 'Replace with the actual implementation'
+        });
+        continue;
+      }
+
+      const debtMatch = debtPattern.exec(line);
+      if (debtMatch) {
+        violations.push({
+          type: 'tech_debt_marker',
+          severity: 'info',
+          message: `${debtMatch[1].toUpperCase()} marker at line ${lineNum} — track in your issue tracker`,
+          line: lineNum,
+          fix: 'Create a tracking issue and replace with a proper solution'
+        });
+        continue;
+      }
+
+      if (notImplPattern.test(line)) {
+        violations.push({
+          type: 'unimplemented_stub',
+          severity: 'error',
+          message: `Unimplemented stub at line ${lineNum} — will throw at runtime`,
+          line: lineNum,
+          fix: 'Implement the required functionality'
+        });
+      }
+    }
+
+    return violations;
   }
 }

@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /home/mohantn/REPO/gate_keeper/dist/hook-receiver.js"
+          }
+        ]
+      }
+    ]
+  }
+}

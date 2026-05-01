@@ -41,6 +41,7 @@ export class StringAnalyzer {
     const violations = isReact
       ? this.detectReactViolations(sourceFile)
       : this.detectTypeScriptViolations(sourceFile);
+    violations.push(...this.detectTodoPlaceholders(code));
     const dependencies = this.extractDependencies(sourceFile);
     const rating = this.ratingCalc.calculate(violations, metrics, dependencies);
 
@@ -115,6 +116,8 @@ export class StringAnalyzer {
         message: `Class has ${methodCount} methods (>20) — consider splitting`,
       });
     }
+
+    violations.push(...this.detectTodoPlaceholders(code));
 
     const metrics: Metrics = {
       linesOfCode: lines.length,
@@ -222,5 +225,50 @@ export class StringAnalyzer {
 
   private bodyHasKeyProp(node: ts.Node): boolean {
     return /\bkey\s*=/.test(node.getText());
+  }
+
+  private detectTodoPlaceholders(code: string): Violation[] {
+    const violations: Violation[] = [];
+    const lines = code.split('\n');
+
+    const incompletePattern = /(?:\/\/|\/\*)\s*(TODO|FIXME|PLACEHOLDER|STUB)\b/i;
+    const debtPattern       = /(?:\/\/|\/\*)\s*(HACK|WORKAROUND|KLUDGE|XXX)\b/i;
+    const notImplTsPattern  = /throw\s+new\s+(?:Error|TypeError|RangeError)\s*\(\s*['"`](?:not\s+implemented|todo|placeholder|stub)/i;
+    const notImplCsPattern  = /throw\s+new\s+NotImplementedException\s*\(/;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const lineNum = i + 1;
+
+      const incompleteMatch = incompletePattern.exec(line);
+      if (incompleteMatch) {
+        violations.push({
+          type: 'todo_placeholder', severity: 'warning',
+          message: `${incompleteMatch[1].toUpperCase()} marker at line ${lineNum} — resolve before merging`,
+          line: lineNum, fix: 'Replace with the actual implementation'
+        });
+        continue;
+      }
+
+      const debtMatch = debtPattern.exec(line);
+      if (debtMatch) {
+        violations.push({
+          type: 'tech_debt_marker', severity: 'info',
+          message: `${debtMatch[1].toUpperCase()} marker at line ${lineNum} — track in your issue tracker`,
+          line: lineNum, fix: 'Create a tracking issue and replace with a proper solution'
+        });
+        continue;
+      }
+
+      if (notImplTsPattern.test(line) || notImplCsPattern.test(line)) {
+        violations.push({
+          type: 'unimplemented_stub', severity: 'error',
+          message: `Unimplemented stub at line ${lineNum} — will throw at runtime`,
+          line: lineNum, fix: 'Implement the required functionality'
+        });
+      }
+    }
+
+    return violations;
   }
 }

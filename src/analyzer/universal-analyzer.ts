@@ -38,7 +38,12 @@ export class UniversalAnalyzer {
       const coverageResult = await this.coverageAnalyzer.checkCoverage(filePath);
       if (coverageResult) {
         result.violations.push(...coverageResult.violations);
-        result.metrics.coveragePercent = coverageResult.coveragePercent;
+        // Only set coveragePercent when it was actually measured — undefined means
+        // no test file exists, so the metric-based coverage penalty is skipped and
+        // the violation-based penalty (no_test_file / hollow_test_file) applies instead.
+        if (coverageResult.coveragePercent !== undefined) {
+          result.metrics.coveragePercent = coverageResult.coveragePercent;
+        }
       }
 
       const rating = this.ratingCalc.calculate(result.violations, result.metrics, result.dependencies);
