@@ -20,6 +20,7 @@ interface VisGraphViewProps {
   selectedRepo: string | null;
   focusNodeId?: string | null;
   fitTrigger?: number;
+  scanning?: boolean;
 }
 
 // ── Vis-Network Data Types ─────────────────────────────────
@@ -58,22 +59,10 @@ interface NetworkRefs {
 function useNetworkRefs(params: VisGraphViewProps): NetworkRefs {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | undefined>(undefined);
-  const nodesDS = useRef(new DataSet<VisNodeData>());
-  const edgesDS = useRef(new DataSet<VisEdgeData>());
+  const nodesDS = useRef<DataSet<VisNodeData>>(new DataSet<VisNodeData>());
+  const edgesDS = useRef<DataSet<VisEdgeData>>(new DataSet<VisEdgeData>());
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const treePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-
-  // Update stable callback refs when props change
-  useEffect(() => {
-    const graphDataRef = useRef(params.graphData);
-    const onNodeClickRef = useRef(params.onNodeClick);
-    const onCanvasClickRef = useRef(params.onCanvasClick);
-    const selectedRepoRef = useRef(params.selectedRepo);
-    graphDataRef.current = params.graphData;
-    onNodeClickRef.current = params.onNodeClick;
-    onCanvasClickRef.current = params.onCanvasClick;
-    selectedRepoRef.current = params.selectedRepo;
-  }, [params.graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
 
   return { containerRef, networkRef, nodesDS, edgesDS, pinnedRef, treePositionsRef };
 }
@@ -85,7 +74,8 @@ function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) 
     fetch(`/api/positions?repo=${encodeURIComponent(selectedRepo)}`)
       .then(r => r.json())
       .then((data: Array<{ nodeId: string; x: number; y: number }>) => {
-        refs.pinnedRef.current = new Map(data.map(p => [p.nodeId, { x: p.x, y: p.y }]));
+        refs.pinnedRef.current.clear();
+        for (const p of data) refs.pinnedRef.current.set(p.nodeId, { x: p.x, y: p.y });
       })
       .catch(() => { });
   }, [selectedRepo, refs.pinnedRef]);
@@ -98,9 +88,11 @@ function useSyncNodes(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typ
 
   useEffect(() => {
     const isLarge = graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
-    refs.treePositionsRef.current = isLarge
+    const positions = isLarge
       ? new Map()
       : computeHierarchicalPositions(graphData.nodes, graphData.edges);
+    refs.treePositionsRef.current.clear();
+    for (const [k, v] of positions) refs.treePositionsRef.current.set(k, v);
 
     const visNodes = buildVisNodes(graphData.nodes, refs.pinnedRef.current, refs.treePositionsRef.current, T);
     const currentIds = new Set(refs.nodesDS.current.getIds() as string[]);
@@ -114,7 +106,7 @@ function useSyncNodes(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typ
         if (!newIds.has(id)) { refs.nodesDS.current.remove(id); refs.pinnedRef.current.delete(id); }
       }
       for (const vn of visNodes) {
-        const existing = refs.nodesDS.current.get(vn.id);
+        const existing = refs.nodesDS.current.get(vn.id) as any;
         if (existing && refs.pinnedRef.current.has(vn.id)) {
           refs.nodesDS.current.update({ ...vn, x: existing.x, y: existing.y });
         } else {
@@ -140,6 +132,16 @@ function useSyncEdges(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typ
     refs.edgesDS.current.add(buildVisEdges(graphData, T));
   }, [graphData.edges, T, refs]);
 
+}
+
+// ── Update interaction on scanning state
+function useUpdateScanningInteraction(refs: React.RefObject<Network | undefined>, scanning?: boolean) {
+  useEffect(() => {
+    if (!refs.current) return;
+    refs.current.setOptions({
+      interaction: { dragView: !scanning }
+    });
+  }, [refs, scanning]);
 }
 
 // ── Focus and highlight node selection
@@ -234,7 +236,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       },
     });
 
-    refs.networkRef.current = network;
+    (refs.networkRef as any).current = network;
 
     let lastHoverUpdatedIds: string[] = [];
     let lastHoverEdgeIds: string[] = [];
@@ -433,7 +435,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
     return () => {
       clearTimeout(fitTimer);
       network.destroy();
-      refs.networkRef.current = undefined;
+      (refs.networkRef as any).current = undefined;
     };
   }, [T, refs, graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
 }
@@ -467,6 +469,7 @@ export function VisGraphView({
   selectedRepo,
   focusNodeId,
   fitTrigger,
+  scanning,
 }: VisGraphViewProps) {
   const { T } = useTheme();
   const refs = useNetworkRefs({ graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger });
@@ -476,6 +479,7 @@ export function VisGraphView({
   useSyncEdges(refs, graphData, T);
   useNodeSelection(refs, graphData, focusNodeId, highlightNodeId, T);
   useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger }, T);
+  useUpdateScanningInteraction(refs.networkRef, scanning);
 
   const { handleZoomIn, handleZoomOut, handleFitView } = createZoomHandlers(refs.networkRef);
 
@@ -499,7 +503,7 @@ export function VisGraphView({
         </div>
       )}
 
-      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+      <div ref={refs.containerRef} style={{ width: '100%', height: '100%' }} />
 
       {/* Compact legend — health colors only */}
       <div style={{

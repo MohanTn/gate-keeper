@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { VisGraphView } from './components/VisGraphView';
 import { DetailPanel } from './components/DetailPanel';
 import { FileListDrawer } from './components/FileListDrawer';
+import { ViolationsPanel } from './components/ViolationsPanel';
 import { GraphData, GraphNode, GraphEdge, RepoInfo, WSMessage, ExcludePattern } from './types';
 import { useTheme, ratingColor as themeRatingColor } from './ThemeContext';
 interface ScanExcludePatterns {
@@ -106,6 +107,8 @@ function useWebSocketConnection(selectedRepo: string | null, onRepoCreated?: () 
                 } else if (msg.type === 'scan_complete') {
                     scanningRef.current = false;
                     setScanProgress(null);
+                    setScanning(false);
+                    setLastScan({ fileCount: msg.scanAnalyzed ?? analyzedRef.current, ts: Date.now() });
                 } else if (msg.type === 'repo_created') {
                     onRepoCreatedRef.current?.();
                 }
@@ -349,6 +352,7 @@ function usePanelActions(
 ) {
     const [showFileList, setShowFileList] = useState(false);
     const [showFilterPanel, setShowFilterPanel] = useState(false);
+    const [showViolationsPanel, setShowViolationsPanel] = useState(false);
 
     useEffect(() => {
         const handleScanComplete = () => {
@@ -364,6 +368,7 @@ function usePanelActions(
     const handleFileListOpen = useCallback(() => {
         setShowFileList(true);
         setShowFilterPanel(false);
+        setShowViolationsPanel(false);
         handleClearSelection();
     }, [handleClearSelection]);
 
@@ -377,14 +382,24 @@ function usePanelActions(
     const handleToggleFilterPanel = useCallback(() => {
         setShowFilterPanel(p => !p);
         setShowFileList(false);
+        setShowViolationsPanel(false);
     }, []);
 
     const handleCloseFilterPanel = useCallback(() => setShowFilterPanel(false), []);
 
+    const handleToggleViolationsPanel = useCallback(() => {
+        setShowViolationsPanel(p => !p);
+        setShowFileList(false);
+        setShowFilterPanel(false);
+    }, []);
+
+    const handleCloseViolationsPanel = useCallback(() => setShowViolationsPanel(false), []);
+
     return {
-        showFileList, showFilterPanel,
+        showFileList, showFilterPanel, showViolationsPanel,
         handleShowRepoSelector, handleFileListOpen, handleFileListSelect,
         handleFileListClose, handleToggleFilterPanel, handleCloseFilterPanel,
+        handleToggleViolationsPanel, handleCloseViolationsPanel,
     };
 }
 
@@ -411,9 +426,10 @@ export default function App() {
     } = useSearchUI(filteredGraphData.nodes, handleNodeSelect);
 
     const {
-        showFileList, showFilterPanel,
+        showFileList, showFilterPanel, showViolationsPanel,
         handleShowRepoSelector, handleFileListOpen, handleFileListSelect,
         handleFileListClose, handleToggleFilterPanel, handleCloseFilterPanel,
+        handleToggleViolationsPanel, handleCloseViolationsPanel,
     } = usePanelActions(handleClearSelection, handleNodeSelect, setShowRepoSelector, filteredGraphData, setScanning, setLastScan);
 
     // Stats
@@ -548,7 +564,7 @@ export default function App() {
                     {overallRating != null && (
                         <HeaderStat label="Score" value={`${overallRating.toFixed(1)}`} color={ratingColor(overallRating, T)} bold />
                     )}
-                    <HeaderStat label="Issues" value={totalViolations} color={totalViolations > 0 ? T.red : T.green} />
+                    <HeaderStat label="Issues" value={totalViolations} color={totalViolations > 0 ? T.red : T.green} onClick={handleToggleViolationsPanel} />
                     {patterns.length > 0 && (
                         <HeaderStat label="Excluded" value={graphData.nodes.length - filteredGraphData.nodes.length} color={T.textDim} />
                     )}
@@ -603,6 +619,7 @@ export default function App() {
                         highlightNodeId={selectedNode?.id}
                         selectedRepo={selectedRepo}
                         focusNodeId={selectedNode?.id}
+                        scanning={scanning}
                     />
                 )}
 
@@ -635,6 +652,15 @@ export default function App() {
                         excludedCount={graphData.nodes.length - filteredGraphData.nodes.length}
                         totalCount={graphData.nodes.length}
                         scanExcludePatterns={scanExcludePatterns}
+                    />
+                )}
+
+                {/* Violations panel overlay */}
+                {!repoLoading && showViolationsPanel && (
+                    <ViolationsPanel
+                        graphData={filteredGraphData}
+                        onClose={handleCloseViolationsPanel}
+                        T={T}
                     />
                 )}
             </div>
@@ -725,13 +751,21 @@ function Divider() {
     return <div style={{ width: 1, height: 20, background: T.border, flexShrink: 0 }} />;
 }
 
-function HeaderStat({ label, value, color, bold }: {
-    label: string; value: number | string; color: string; bold?: boolean;
+function HeaderStat({ label, value, color, bold, onClick }: {
+    label: string; value: number | string; color: string; bold?: boolean; onClick?: () => void;
 }) {
     const { T } = useTheme();
 
     return (
-        <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1, flexShrink: 0 }}>
+        <div
+            onClick={onClick}
+            style={{
+                display: 'flex', flexDirection: 'column', lineHeight: 1, flexShrink: 0,
+                cursor: onClick ? 'pointer' : 'default',
+                padding: onClick ? '2px 4px' : undefined,
+                borderRadius: onClick ? 4 : undefined,
+            }}
+        >
             <span style={{ fontSize: 9, color: T.textDim, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 2 }}>
                 {label}
             </span>

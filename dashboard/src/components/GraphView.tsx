@@ -219,7 +219,7 @@ function useNodeInteraction(
   const handleNodeDrag = useCallback((node: SimNode, translate: { x: number; y: number }) => {
     const nodeId = node.id as string;
     if (!selectedNodes.has(nodeId) || selectedNodes.size <= 1) return;
-    const graphNodes = (fgRef.current as FGWithData | undefined)?.graphData().nodes ?? [];
+    const graphNodes = (fgRef.current as unknown as FGWithData | undefined)?.graphData().nodes ?? [];
 
     if (!isDragging.current) {
       isDragging.current = true;
@@ -257,7 +257,7 @@ function useNodeInteraction(
     movedPositions.set(nodeId, { x: node.x ?? 0, y: node.y ?? 0 });
 
     if (selectedNodes.has(nodeId) && selectedNodes.size > 1) {
-      const graphNodes = (fgRef.current as FGWithData | undefined)?.graphData().nodes ?? [];
+      const graphNodes = (fgRef.current as unknown as FGWithData | undefined)?.graphData().nodes ?? [];
       for (const id of selectedNodes) {
         if (id === nodeId) continue;
         const n = graphNodes.find(n => n.id === id);

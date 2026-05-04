@@ -39,7 +39,7 @@ export function buildVisNodes(
     pinned: Map<string, { x: number; y: number }>,
     treePositions: Map<string, { x: number; y: number }>,
     theme: ThemeTokens = T,
-): Record<string, unknown>[] {
+): any[] {
     // For large graphs without layout positions, use a grid scatter
     const needsScatter = treePositions.size === 0 && nodes.length > 200;
     const cols = needsScatter ? Math.ceil(Math.sqrt(nodes.length)) : 0;
@@ -70,7 +70,7 @@ export function buildVisNodes(
     });
 }
 
-export function buildVisEdges(graphData: GraphData, theme: ThemeTokens = T): Record<string, unknown>[] {
+export function buildVisEdges(graphData: GraphData, theme: ThemeTokens = T): any[] {
     return graphData.edges.map(edge => {
         const from = typeof edge.source === 'string' ? edge.source : edge.source?.id;
         const to = typeof edge.target === 'string' ? edge.target : edge.target?.id;

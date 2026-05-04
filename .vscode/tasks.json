@@ -4,7 +4,7 @@
     {
       "label": "Gate Keeper: Register Repo on Open (GitHub Copilot)",
       "type": "shell",
-      "command": "sleep 3 && echo \"{\\\"hook_event_name\\\":\\\"session_create\\\",\\\"tool_name\\\":\\\"vscode\\\",\\\"session_id\\\":\\\"copilot-$(date +%s)\\\",\\\"session_info\\\":{\\\"workspace_path\\\":\\\"${workspaceFolder}\\\",\\\"session_type\\\":\\\"github-copilot\\\"}}\" | node /home/dh211371/REPO/gate-keeper/dist/hook-receiver.js",
+      "command": "sleep 3 && echo \"{\\\"hook_event_name\\\":\\\"session_create\\\",\\\"tool_name\\\":\\\"vscode\\\",\\\"session_id\\\":\\\"copilot-$(date +%s)\\\",\\\"session_info\\\":{\\\"workspace_path\\\":\\\"${workspaceFolder}\\\",\\\"session_type\\\":\\\"github-copilot\\\"}}\" | node ${workspaceFolder}/dist/hook-receiver.js",
       "runOptions": {
         "runOn": "folderOpen"
       },
@@ -18,7 +18,7 @@
     {
       "label": "Gate Keeper: Analyze Current File",
       "type": "shell",
-      "command": "echo '{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${file}\"}}' | node /home/dh211371/REPO/gate-keeper/dist/hook-receiver.js",
+      "command": "echo '{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"${file}\"}}' | node ${workspaceFolder}/dist/hook-receiver.js",
       "runOptions": {
         "runOn": "default"
       },
