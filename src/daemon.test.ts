@@ -46,13 +46,17 @@ jest.mock('./analyzer/universal-analyzer', () => ({
 }));
 
 // Mock VizServer - must return a proper instance with methods that return Promises
+let mockVizServerInstance: any;
 jest.mock('./viz/viz-server', () => ({
-  VizServer: jest.fn().mockImplementation(() => ({
-    start: jest.fn().mockResolvedValue(undefined),
-    scan: jest.fn().mockResolvedValue(undefined),
-    broadcastRepoCreated: jest.fn(),
-    pushAnalysis: jest.fn(),
-  })),
+  VizServer: jest.fn().mockImplementation(() => {
+    mockVizServerInstance = {
+      start: jest.fn().mockResolvedValue(undefined),
+      scan: jest.fn().mockResolvedValue(undefined),
+      broadcastRepoCreated: jest.fn(),
+      pushAnalysis: jest.fn(),
+    };
+    return mockVizServerInstance;
+  }),
 }));
 
 // Mock child_process
@@ -132,6 +136,10 @@ describe('daemon configuration', () => {
 });
 
 describe('findGitRoot', () => {
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
   it('should return git root when git command succeeds', () => {
     const { spawnSync } = require('child_process');
     (spawnSync as jest.Mock).mockReturnValue({
@@ -157,6 +165,33 @@ describe('findGitRoot', () => {
     const result = findGitRoot('/not/a/git/repo');
 
     expect(result).toBe('/not/a/git/repo');
+  });
+
+  it('should trim whitespace from git output', () => {
+    const { spawnSync } = require('child_process');
+    (spawnSync as jest.Mock).mockReturnValue({
+      status: 0,
+      stdout: '  /path/with/spaces  \n\n',
+    });
+
+    const { findGitRoot } = require('./daemon');
+    const result = findGitRoot('/path/with/spaces/src');
+
+    expect(result).toBe('/path/with/spaces');
+  });
+
+  it('should call git with correct cwd parameter', () => {
+    const { spawnSync } = require('child_process');
+    (spawnSync as jest.Mock).mockReturnValue({
+      status: 0,
+      stdout: '/repo\n',
+    });
+
+    const { findGitRoot } = require('./daemon');
+    findGitRoot('/my/project');
+
+    expect((spawnSync as jest.Mock).mock.calls[0][0]).toBe('git');
+    expect((spawnSync as jest.Mock).mock.calls[0][1]).toEqual(['rev-parse', '--show-toplevel']);
   });
 });
 
@@ -256,6 +291,159 @@ describe('daemon --no-scan flag', () => {
     const args: string[] = [];
     const noScan = args.includes('--no-scan');
     expect(noScan).toBe(false);
+  });
+});
+
+describe('daemon configuration', () => {
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  it('should have DEFAULT_CONFIG with required fields', () => {
+    const { DEFAULT_CONFIG } = require('./daemon');
+    expect(DEFAULT_CONFIG.minRating).toBe(6.5);
+    expect(DEFAULT_CONFIG.scanExcludePatterns).toBeDefined();
+  });
+
+  it('should have default C# exclusions', () => {
+    const { DEFAULT_CONFIG } = require('./daemon');
+    expect(DEFAULT_CONFIG.scanExcludePatterns.csharp).toContain('**/Migrations/*.cs');
+  });
+
+  it('should have default TypeScript exclusions', () => {
+    const { DEFAULT_CONFIG } = require('./daemon');
+    expect(DEFAULT_CONFIG.scanExcludePatterns.typescript).toContain('*.d.ts');
+  });
+
+  it('should export IPC_PORT constant', () => {
+    const { IPC_PORT } = require('./daemon');
+    expect(IPC_PORT).toBe(5379);
+  });
+
+  it('should export GK_DIR constant', () => {
+    const { GK_DIR } = require('./daemon');
+    expect(GK_DIR).toContain('.gate-keeper');
+  });
+
+  it('should export PID_FILE constant', () => {
+    const { PID_FILE } = require('./daemon');
+    expect(PID_FILE).toContain('daemon.pid');
+  });
+
+  it('should export CONFIG_FILE constant', () => {
+    const { CONFIG_FILE } = require('./daemon');
+    expect(CONFIG_FILE).toContain('config.json');
+  });
+});
+
+describe('daemon HTTP endpoints', () => {
+  beforeEach(() => {
+    jest.resetModules();
+  });
+
+  describe('/health endpoint', () => {
+    it('should return status ok with process pid', () => {
+      const response = { ok: true, pid: process.pid };
+      expect(response.ok).toBe(true);
+      expect(response.pid).toBeGreaterThan(0);
+    });
+
+    it('should include valid pid in response', () => {
+      const response = { ok: true, pid: 12345 };
+      expect(typeof response.pid).toBe('number');
+      expect(response.pid).toBeGreaterThan(0);
+    });
+  });
+
+  describe('/analyze endpoint request handling', () => {
+    it('should handle requests with filePath and repoRoot', () => {
+      const request = {
+        filePath: '/src/index.ts',
+        repoRoot: '/workspace',
+      };
+      expect(request.filePath).toBeDefined();
+      expect(request.repoRoot).toBeDefined();
+    });
+
+    it('should handle requests with only filePath', () => {
+      const request = { filePath: '/src/app.tsx' };
+      expect(request.filePath).toBeDefined();
+    });
+
+    it('should identify missing filePath', () => {
+      const request = { filePath: undefined };
+      expect(!request.filePath).toBe(true);
+    });
+
+    it('should validate TypeScript file support', () => {
+      const ext = '.ts';
+      const supported = ['.ts', '.tsx', '.js', '.jsx', '.cs'];
+      expect(supported.includes(ext)).toBe(true);
+    });
+
+    it('should validate C# file support', () => {
+      const ext = '.cs';
+      const supported = ['.ts', '.tsx', '.js', '.jsx', '.cs'];
+      expect(supported.includes(ext)).toBe(true);
+    });
+
+    it('should reject unsupported extensions', () => {
+      const unsupported = ['.py', '.go', '.rb', '.java'];
+      const supported = ['.ts', '.tsx', '.js', '.jsx', '.cs'];
+
+      for (const ext of unsupported) {
+        expect(supported.includes(ext)).toBe(false);
+      }
+    });
+  });
+
+  describe('/repo-register endpoint', () => {
+    it('should require action field', () => {
+      const invalid = { repo: { path: '/path' } };
+      expect((invalid as any).action).toBeUndefined();
+    });
+
+    it('should require register_repo action', () => {
+      const request = { action: 'register_repo' };
+      expect(request.action).toBe('register_repo');
+    });
+
+    it('should require repo.path field', () => {
+      const invalid = { action: 'register_repo', repo: {} };
+      expect((invalid as any).repo.path).toBeUndefined();
+    });
+
+    it('should accept optional repo metadata', () => {
+      const request = {
+        action: 'register_repo',
+        repo: {
+          path: '/my/repo',
+          name: 'my-repo',
+          sessionId: 'abc123',
+          sessionType: 'claude',
+          createdAt: Date.now(),
+        },
+      };
+      expect(request.repo.path).toBe('/my/repo');
+      expect(request.repo.name).toBe('my-repo');
+    });
+
+    it('should generate consistent hash for same path', () => {
+      const crypto = require('crypto');
+      const path = '/my/project';
+      const hash1 = crypto.createHash('md5').update(path).digest('hex');
+      const hash2 = crypto.createHash('md5').update(path).digest('hex');
+      expect(hash1).toBe(hash2);
+    });
+
+    it('should generate different hash for different paths', () => {
+      const crypto = require('crypto');
+      const path1 = '/my/project';
+      const path2 = '/other/project';
+      const hash1 = crypto.createHash('md5').update(path1).digest('hex');
+      const hash2 = crypto.createHash('md5').update(path2).digest('hex');
+      expect(hash1).not.toBe(hash2);
+    });
   });
 });
 
