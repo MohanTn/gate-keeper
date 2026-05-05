@@ -208,8 +208,20 @@ export class VizServer {
     });
   }
 
-  stop(): void {
-    this.server.close();
-    this.wss.close();
+  stop(): Promise<void> {
+    return new Promise((resolve) => {
+      const closeServer = () => {
+        const closeResult = this.server.close?.((err?: Error) => {
+          if (err) console.error('[gate-keeper] Error closing server:', err);
+          resolve();
+        });
+        if (closeResult === undefined) resolve();
+      };
+      const closeWssResult = this.wss.close?.((err?: Error) => {
+        if (err) console.error('[gate-keeper] Error closing WebSocket:', err);
+        closeServer();
+      });
+      if (closeWssResult === undefined) closeServer();
+    });
   }
 }

@@ -72,8 +72,8 @@ describe('VizServer', () => {
     config = { minRating: 6.5, scanExcludePatterns: { global: [], csharp: [], typescript: [] } };
   });
 
-  afterEach(() => {
-    if (vizServer) vizServer.stop();
+  afterEach(async () => {
+    if (vizServer) await vizServer.stop();
     cache.close();
     if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
     const cf = path.join(process.env.HOME ?? '/tmp', '.gate-keeper', 'config.json');
