@@ -22,10 +22,11 @@ interface DetailPanelProps {
   graphData: GraphData;
   onClose: () => void;
   onNodeSelect: (node: GraphNode) => void;
+  selectedRepo: string | null;
 }
 
 // ── Main Component ─────────────────────────────────────────
-export function DetailPanel({ node, graphData, onClose, onNodeSelect }: DetailPanelProps) {
+export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRepo }: DetailPanelProps) {
   const { T } = useTheme();
   const [panelState, setPanelState] = useState<{ detail: FileDetailResponse | null; loading: boolean }>(
     { detail: null, loading: false }
@@ -34,11 +35,12 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect }: DetailPa
 
   useEffect(() => {
     setPanelState({ detail: null, loading: true });
-    fetch(`/api/file-detail?file=${encodeURIComponent(node.id)}`)
+    const url = `/api/file-detail?file=${encodeURIComponent(node.id)}${selectedRepo ? `&repo=${encodeURIComponent(selectedRepo)}` : ''}`;
+    fetch(url)
       .then(r => r.ok ? r.json() : null)
       .then((d: FileDetailResponse | null) => { setPanelState({ detail: d, loading: false }); })
       .catch(() => setPanelState(prev => ({ ...prev, loading: false })));
-  }, [node.id]);
+  }, [node.id, selectedRepo]);
 
   const deps = graphData.edges.filter(e => {
     const src = typeof e.source === 'string' ? e.source : e.source.id;

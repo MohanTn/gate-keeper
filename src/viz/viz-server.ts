@@ -1,116 +1,24 @@
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import open from 'open';
-import { DependencyGraph, CycleInfo } from '../graph/dependency-graph';
+import { DependencyGraph } from '../graph/dependency-graph';
 import { SqliteCache } from '../cache/sqlite-cache';
 import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { RatingCalculator } from '../rating/rating-calculator';
 import { PatternDetector } from '../analyzer/pattern-detector';
 import { RefactoringAdvisor } from '../analyzer/refactoring-advisor';
-import { FileAnalysis, Config, GraphData, GraphNode, GraphEdge, RepoMetadata, WSMessage } from '../types';
+import { FileAnalysis, Config, GraphData, RepoMetadata, WSMessage } from '../types';
+import { registerRoutes } from './viz-routes';
+import { scan, scanRepo } from './viz-scanner';
 
 const VIZ_PORT = 5378;
 const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
 const CONFIG_FILE = path.join(GK_DIR, 'config.json');
 const MAX_SCAN_LOGS = 500;
 
-const SCAN_EXCLUDE_DIRS = new Set([
-  'node_modules', 'dist', 'build', '.git', '.next', 'out',
-  'coverage', 'vendor', '.cache', '__pycache__', 'bin', 'obj'
-]);
-
-/** Convert a simple glob pattern to a RegExp. Supports * and ** wildcards. */
-function globToRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '__GLOBSTAR__')
-    .replace(/\*/g, '[^/]*')
-    .replace(/__GLOBSTAR__/g, '.*');
-  return new RegExp(`(?:^|/)${escaped}$`, 'i');
-}
-
-/** Map file extension to config language key */
-function extToConfigLang(ext: string): 'csharp' | 'typescript' | null {
-  if (ext === '.cs') return 'csharp';
-  if (['.ts', '.tsx', '.jsx', '.js'].includes(ext)) return 'typescript';
-  return null;
-}
-
-/** Check if a file path should be excluded by scan patterns */
-function shouldExcludeFile(filePath: string, ext: string, patterns: Config['scanExcludePatterns']): boolean {
-  if (!patterns) return false;
-  const fileName = filePath.split('/').pop() ?? filePath;
-
-  // Check global patterns
-  if (patterns.global) {
-    for (const p of patterns.global) {
-      const re = globToRegex(p);
-      if (re.test(filePath) || re.test(fileName)) return true;
-    }
-  }
-
-  // Check language-specific patterns
-  const lang = extToConfigLang(ext);
-  const langPatterns = lang ? patterns[lang] : null;
-  if (langPatterns) {
-    for (const p of langPatterns) {
-      const re = globToRegex(p);
-      if (re.test(filePath) || re.test(fileName)) return true;
-    }
-  }
-
-  return false;
-}
-
-function* walkFiles(dir: string): Generator<string> {
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (entry.isDirectory()) {
-      if (SCAN_EXCLUDE_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
-      yield* walkFiles(path.join(dir, entry.name));
-    } else if (entry.isFile()) {
-      yield path.join(dir, entry.name);
-    }
-  }
-}
-
-function getGitDiffStats(filePath: string): { added: number; removed: number } | null {
-  try {
-    const numstat = spawnSync('git', ['diff', '--numstat', 'HEAD', '--', filePath], {
-      encoding: 'utf8', timeout: 5000
-    });
-    const line = numstat.stdout?.trim();
-    if (line) {
-      const parts = line.split('\t');
-      return { added: parseInt(parts[0], 10) || 0, removed: parseInt(parts[1], 10) || 0 };
-    }
-
-    const status = spawnSync('git', ['status', '--porcelain', '--', filePath], {
-      encoding: 'utf8', timeout: 5000
-    });
-    const statusLine = status.stdout?.trim() ?? '';
-    if (statusLine.startsWith('??') || statusLine.startsWith('A ')) {
-      const wc = spawnSync('wc', ['-l', filePath], { encoding: 'utf8' });
-      const lines = parseInt(wc.stdout?.trim().split(' ')[0] ?? '0', 10) || 0;
-      return { added: lines, removed: 0 };
-    }
-
-    return { added: 0, removed: 0 };
-  } catch {
-    return null;
-  }
-}
-
-// WebSocket client extended with a repo filter
 interface FilteredClient extends WebSocket {
   __repo: string | null;
 }
@@ -128,7 +36,6 @@ export class VizServer {
   private hasAutoOpened = false;
   private scanning = false;
   private workDir: string;
-  private repoRoot: string;
   private config: Config;
   private scanLogs: Array<{ message: string; level: 'info' | 'warn' | 'error'; timestamp: number }> = [];
 
@@ -142,7 +49,6 @@ export class VizServer {
     this.cache = cache;
     this.analyzer = analyzer;
     this.workDir = workDir;
-    this.repoRoot = repoRoot;
     this.config = config;
     this.loadFromCache();
     this.setupRoutes();
@@ -150,15 +56,13 @@ export class VizServer {
   }
 
   private graphFor(repo: string): DependencyGraph {
-    if (!this.graphs.has(repo)) {
-      this.graphs.set(repo, new DependencyGraph());
-    }
+    if (!this.graphs.has(repo)) this.graphs.set(repo, new DependencyGraph());
     return this.graphs.get(repo)!;
   }
 
   private mergedGraphData(): GraphData {
-    const nodes: GraphNode[] = [];
-    const edges: GraphEdge[] = [];
+    const nodes: GraphData['nodes'] = [];
+    const edges: GraphData['edges'] = [];
     for (const g of this.graphs.values()) {
       const gd = g.toGraphData();
       nodes.push(...gd.nodes);
@@ -169,275 +73,106 @@ export class VizServer {
 
   private loadFromCache(): void {
     for (const analysis of this.cache.getAll()) {
-      if (analysis.repoRoot) {
-        this.graphFor(analysis.repoRoot).upsert(analysis);
-      }
+      if (analysis.repoRoot) this.graphFor(analysis.repoRoot).upsert(analysis);
     }
   }
 
   private setupRoutes(): void {
     this.app.use(express.json());
-
-    const dashboardBuild = path.join(__dirname, '../../dashboard/dist');
-    this.app.use('/viz', express.static(dashboardBuild));
-
-    this.app.get('/', (_req, res) => res.redirect('/viz'));
-
-    this.app.get('/api/repos', (_req, res) => {
-      // Merge registered repos (repositories table) with repos that have analyses
-      const registered = this.cache.getAllRepositories(true);
-      const analyzedRoots = new Set(this.cache.getRepos());
-
-      const repoMap = new Map<string, { repoRoot: string; label: string; fileCount: number; sessionType: string }>();
-
-      // Seed from registered repos first (they have session metadata)
-      for (const r of registered) {
-        repoMap.set(r.path, {
-          repoRoot: r.path,
-          label: r.name,
-          fileCount: this.graphs.get(r.path)?.toGraphData().nodes.length ?? 0,
-          sessionType: r.sessionType
-        });
-      }
-
-      // Add any repos that have analyses but weren't explicitly registered
-      for (const repo of analyzedRoots) {
-        if (!repoMap.has(repo)) {
-          repoMap.set(repo, {
-            repoRoot: repo,
-            label: path.basename(repo),
-            fileCount: this.graphs.get(repo)?.toGraphData().nodes.length ?? 0,
-            sessionType: 'unknown'
-          });
-        }
-      }
-
-      res.json(Array.from(repoMap.values()));
+    registerRoutes(this.app, {
+      graphs: this.graphs, cache: this.cache, config: this.config,
+      ratingCalc: this.ratingCalc, patternDetector: this.patternDetector,
+      refactoringAdvisor: this.refactoringAdvisor,
+      scanning: () => this.scanning, setScanning: (v: boolean) => { this.scanning = v; },
+      scanFn: (force: boolean) => this.scan(force),
+      scanRepoFn: (repo: string, force: boolean) => this.scanRepo(repo, force),
+      mergedGraphData: () => this.mergedGraphData(),
+      graphFor: (repo: string) => this.graphFor(repo),
+      mergedOverallRating: () => this.mergedOverallRating(),
+      appendScanLog: (msg: string, level?: 'info' | 'warn' | 'error') => this.appendScanLog(msg, level),
+      getLiveConfig: () => this.getLiveConfig(),
+      workDir: this.workDir,
     });
+  }
 
-    this.app.get('/api/graph', (req, res) => {
-      const repo = req.query['repo'] as string | undefined;
-      res.json(repo ? this.graphFor(repo).toGraphData() : this.mergedGraphData());
+  private setupWebSocket(): void {
+    this.wss.on('connection', (ws, req) => {
+      const url = new URL(req.url ?? '/', 'http://localhost');
+      const repo = url.searchParams.get('repo') ?? null;
+      (ws as FilteredClient).__repo = repo;
+      const graphData = repo ? this.graphFor(repo).toGraphData() : this.mergedGraphData();
+      ws.send(JSON.stringify({ type: 'init', data: graphData } satisfies WSMessage));
+      ws.on('error', err => console.error('[gate-keeper] WebSocket error:', err.message));
     });
+  }
 
-    this.app.get('/api/hotspots', (req, res) => {
-      const repo = req.query['repo'] as string | undefined;
-      if (repo) {
-        res.json(this.graphFor(repo).findHotspots());
-      } else {
-        const all: FileAnalysis[] = [];
-        for (const g of this.graphs.values()) all.push(...g.findHotspots(10));
-        res.json(all.sort((a, b) => a.rating - b.rating).slice(0, 5));
-      }
+  async scan(force = false): Promise<void> {
+    await scan({
+      cache: this.cache, analyzer: this.analyzer, config: this.config,
+      workDir: this.workDir, graphs: this.graphs,
+      graphFor: (repo: string) => this.graphFor(repo),
+      broadcast: (msg: WSMessage, repoFilter?: string) => this.broadcast(msg, repoFilter),
+      appendScanLog: (msg: string, level?: 'info' | 'warn' | 'error') => this.appendScanLog(msg, level),
+      getScanning: () => this.scanning, setScanning: (v: boolean) => { this.scanning = v; },
     });
+  }
 
-    this.app.get('/api/trends', (req, res) => {
-      const filePath = req.query['file'] as string;
-      const repo = req.query['repo'] as string;
-      if (!filePath || !repo) {
-        res.status(400).json({ error: 'file and repo query params required' });
-        return;
-      }
-      res.json(this.cache.getRatingHistory(filePath, repo));
+  async scanRepo(repoRoot: string, force = false): Promise<void> {
+    await scanRepo({
+      cache: this.cache, analyzer: this.analyzer, config: this.config,
+      workDir: this.workDir, graphs: this.graphs,
+      graphFor: (repo: string) => this.graphFor(repo),
+      broadcast: (msg: WSMessage, repoFilter?: string) => this.broadcast(msg, repoFilter),
+      appendScanLog: (msg: string, level?: 'info' | 'warn' | 'error') => this.appendScanLog(msg, level),
+      getScanning: () => this.scanning, setScanning: (v: boolean) => { this.scanning = v; },
+    }, repoRoot, force);
+  }
+
+  pushAnalysis(analysis: FileAnalysis): void {
+    const repo = analysis.repoRoot ?? this.workDir;
+    const graph = this.graphFor(repo);
+    graph.upsert(analysis);
+    const graphData = graph.toGraphData();
+    const updatedNode = graphData.nodes.find(n => n.id === analysis.path);
+    const updatedEdges = graphData.edges.filter(e => e.source === analysis.path || e.target === analysis.path);
+    this.broadcast({ type: 'update', delta: { nodes: updatedNode ? [updatedNode] : [], edges: updatedEdges as GraphData['edges'] }, analysis } satisfies WSMessage, repo);
+    this.maybeAutoOpen(repo);
+  }
+
+  broadcastRepoCreated(repo: RepoMetadata): void {
+    this.broadcast({ type: 'repo_created', repo } satisfies WSMessage);
+  }
+
+  private broadcast(msg: WSMessage, repoFilter?: string): void {
+    const json = JSON.stringify(msg);
+    this.wss.clients.forEach(client => {
+      const clientRepo = (client as FilteredClient).__repo;
+      if (!clientRepo || !repoFilter || clientRepo === repoFilter) client.send(json);
     });
+  }
 
-    this.app.get('/api/status', (req, res) => {
-      const repo = req.query['repo'] as string | undefined;
-      const graph = repo ? this.graphs.get(repo) : null;
-      res.json({
-        running: true,
-        port: VIZ_PORT,
-        overallRating: graph ? graph.overallRating() : this.mergedOverallRating(),
-        cycles: graph ? graph.detectCycles().length : 0,
-        scanning: this.scanning
-      });
-    });
+  private mergedOverallRating(): number {
+    const graphs = Array.from(this.graphs.values());
+    if (graphs.length === 0) return 10;
+    const sum = graphs.reduce((a, g) => a + g.overallRating(), 0);
+    return Math.round((sum / graphs.length) * 10) / 10;
+  }
 
-    this.app.get('/api/cycles', (req, res) => {
-      const repo = req.query['repo'] as string | undefined;
-      if (repo) {
-        res.json(this.graphFor(repo).detectCycles());
-      } else {
-        const cycles: CycleInfo[] = [];
-        for (const g of this.graphs.values()) cycles.push(...g.detectCycles());
-        res.json(cycles);
-      }
-    });
+  private maybeAutoOpen(repo: string): void {
+    if (this.hasAutoOpened) return;
+    const rating = this.graphs.get(repo)?.overallRating() ?? 10;
+    if (rating < 5.0) {
+      open(`http://localhost:${VIZ_PORT}/viz`, { wait: false }).catch(() => {});
+      this.hasAutoOpened = true;
+      console.error(`[gate-keeper] Architecture issues (rating ${rating}/10) — opening dashboard`);
+    }
+  }
 
-    this.app.post('/api/scan', (req, res) => {
-      if (this.scanning) {
-        res.status(409).json({ error: 'Scan already in progress' });
-        return;
-      }
-      const { repo } = req.body as { repo?: string };
-      if (repo) {
-        res.json({ started: true, repo });
-        this.scanRepo(repo, true).catch(err => {
-          console.error('[gate-keeper] Scan error:', err);
-        });
-      } else {
-        res.json({ started: true, workDir: this.workDir });
-        this.scan(true).catch(err => {
-          console.error('[gate-keeper] Scan error:', err);
-        });
-      }
-    });
-
-    this.app.get('/api/file-detail', (req, res) => {
-      const filePath = req.query['file'] as string;
-      const repo = req.query['repo'] as string;
-      if (!filePath || !repo) {
-        res.status(400).json({ error: 'file and repo query params required' });
-        return;
-      }
-
-      const analysis = this.cache.get(filePath, repo);
-      if (!analysis) {
-        res.status(404).json({ error: 'File not in cache' });
-        return;
-      }
-
-      const { breakdown } = this.ratingCalc.calculateWithBreakdown(
-        analysis.violations,
-        analysis.metrics,
-        analysis.dependencies
-      );
-
-      const graph = this.graphs.get(repo);
-      const cycles = graph ? graph.detectCycles() : [];
-      const refactoringHints = this.refactoringAdvisor.suggest(analysis, cycles);
-
-      res.json({
-        analysis,
-        ratingBreakdown: breakdown,
-        gitDiff: getGitDiffStats(filePath),
-        refactoringHints,
-      });
-    });
-
-    this.app.get('/api/positions', (req, res) => {
-      const repo = req.query['repo'] as string;
-      if (!repo) { res.status(400).json({ error: 'repo param required' }); return; }
-      res.json(this.cache.getNodePositions(repo));
-    });
-
-    this.app.post('/api/positions', (req, res) => {
-      const { repo, nodeId, x, y } = req.body as {
-        repo: string; nodeId: string; x: number; y: number;
-      };
-      if (!repo || !nodeId || x == null || y == null) {
-        res.status(400).json({ error: 'repo, nodeId, x, y required' });
-        return;
-      }
-      this.cache.saveNodePosition(repo, nodeId, x, y);
-      res.json({ ok: true });
-    });
-
-    this.app.post('/api/clear', (req, res) => {
-      const { repo } = req.body as { repo: string };
-      if (!repo) {
-        res.status(400).json({ error: 'repo parameter required' });
-        return;
-      }
-      const deleted = this.cache.clearRepo(repo);
-      this.graphs.delete(repo);
-      console.error(`[gate-keeper] Cleared ${deleted} analyses for repo: ${repo}`);
-      res.json({ ok: true, deleted });
-    });
-
-    this.app.delete('/api/repos', (req, res) => {
-      const { repoRoot } = req.body as { repoRoot: string };
-      if (!repoRoot) {
-        res.status(400).json({ error: 'repoRoot parameter required' });
-        return;
-      }
-      const repoRecord = this.cache.getRepositoryByPath(repoRoot);
-      const deletedAnalyses = this.cache.clearRepo(repoRoot);
-      this.graphs.delete(repoRoot);
-      const deletedRepo = repoRecord ? this.cache.deleteRepository(repoRecord.id) : 0;
-      console.error(`[gate-keeper] Deleted repo: ${repoRoot} (${deletedAnalyses} analyses, registry: ${deletedRepo})`);
-      res.json({ ok: true, deletedAnalyses, deletedRepo });
-    });
-
-    // ── Exclude patterns ────────────────────────────────────
-    this.app.get('/api/exclude-patterns', (req, res) => {
-      const repo = req.query['repo'] as string;
-      if (!repo) { res.status(400).json({ error: 'repo param required' }); return; }
-      res.json(this.cache.getExcludePatterns(repo));
-    });
-
-    this.app.post('/api/exclude-patterns', (req, res) => {
-      const { repo, pattern, label } = req.body as { repo: string; pattern: string; label?: string };
-      if (!repo || !pattern) {
-        res.status(400).json({ error: 'repo and pattern required' });
-        return;
-      }
-      // Basic validation — pattern should be non-empty, max 200 chars
-      if (pattern.length > 200) {
-        res.status(400).json({ error: 'Pattern too long (max 200 chars)' });
-        return;
-      }
-      const id = this.cache.addExcludePattern(repo, pattern, label);
-      res.json({ ok: true, id });
-    });
-
-    this.app.delete('/api/exclude-patterns/:id', (req, res) => {
-      const id = parseInt(req.params['id'], 10);
-      if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
-      const ok = this.cache.removeExcludePattern(id);
-      res.json({ ok });
-    });
-
-    // Expose the scan exclude patterns from config (read-only)
-    this.app.get('/api/scan-config', (_req, res) => {
-      res.json({
-        scanExcludePatterns: this.config.scanExcludePatterns ?? { global: [], csharp: [], typescript: [] },
-      });
-    });
-
-    this.app.get('/api/scan-logs', (_req, res) => {
-      res.json(this.scanLogs);
-    });
-
-    this.app.get('/api/config', (_req, res) => {
-      res.json(this.getLiveConfig());
-    });
-
-    this.app.put('/api/config', (req, res) => {
-      const payload = req.body as Partial<Config>;
-      const current = this.getLiveConfig();
-      const merged: Config = {
-        minRating: typeof payload.minRating === 'number' ? payload.minRating : current.minRating,
-        scanExcludePatterns: {
-          global: payload.scanExcludePatterns?.global ?? current.scanExcludePatterns?.global ?? [],
-          csharp: payload.scanExcludePatterns?.csharp ?? current.scanExcludePatterns?.csharp ?? [],
-          typescript: payload.scanExcludePatterns?.typescript ?? current.scanExcludePatterns?.typescript ?? [],
-        },
-      };
-
-      if (Number.isNaN(merged.minRating) || merged.minRating < 0 || merged.minRating > 10) {
-        res.status(400).json({ error: 'minRating must be between 0 and 10' });
-        return;
-      }
-
-      try {
-        fs.mkdirSync(GK_DIR, { recursive: true });
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(merged, null, 2));
-        this.config = merged;
-        this.appendScanLog('Configuration updated', 'info');
-        res.json({ ok: true, config: merged });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        res.status(500).json({ error: msg });
-      }
-    });
-
-    this.app.get('/api/patterns', (req, res) => {
-      const repo = req.query['repo'] as string | undefined;
-      const analyses = this.cache.getAll(repo);
-      const reports = this.patternDetector.detect(analyses);
-      res.json(reports);
-    });
+  private appendScanLog(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
+    const entry = { message, level, timestamp: Date.now() };
+    this.scanLogs.push(entry);
+    if (this.scanLogs.length > MAX_SCAN_LOGS) this.scanLogs = this.scanLogs.slice(-MAX_SCAN_LOGS);
+    this.broadcast({ type: 'scan_log', logMessage: entry.message, logLevel: entry.level, logTimestamp: entry.timestamp } satisfies WSMessage);
   }
 
   private getLiveConfig(): Config {
@@ -453,9 +188,7 @@ export class VizServer {
           },
         };
       }
-    } catch {
-      // Fall through to in-memory config.
-    }
+    } catch { /* Fall through */ }
     return {
       minRating: this.config.minRating,
       scanExcludePatterns: {
@@ -464,242 +197,6 @@ export class VizServer {
         typescript: this.config.scanExcludePatterns?.typescript ?? [],
       },
     };
-  }
-
-  private appendScanLog(message: string, level: 'info' | 'warn' | 'error' = 'info'): void {
-    const entry = { message, level, timestamp: Date.now() };
-    this.scanLogs.push(entry);
-    if (this.scanLogs.length > MAX_SCAN_LOGS) {
-      this.scanLogs = this.scanLogs.slice(-MAX_SCAN_LOGS);
-    }
-    this.broadcast({
-      type: 'scan_log',
-      logMessage: entry.message,
-      logLevel: entry.level,
-      logTimestamp: entry.timestamp,
-    } satisfies WSMessage);
-  }
-
-  private setupWebSocket(): void {
-    this.wss.on('connection', (ws, req) => {
-      const url = new URL(req.url ?? '/', 'http://localhost');
-      const repo = url.searchParams.get('repo') ?? null;
-      (ws as FilteredClient).__repo = repo;
-
-      const graphData = repo
-        ? this.graphFor(repo).toGraphData()
-        : this.mergedGraphData();
-
-      ws.send(JSON.stringify({ type: 'init', data: graphData } satisfies WSMessage));
-
-      ws.on('error', err => {
-        console.error('[gate-keeper] WebSocket error:', err.message);
-      });
-    });
-  }
-
-  async scan(force = false): Promise<void> {
-    if (this.scanning) return;
-    this.scanning = true;
-
-    // Walk workDir + every repo root from analyses + registered repos
-    const registeredPaths = this.cache.getAllRepositories(true).map(r => r.path);
-    const roots = new Set<string>([this.workDir, ...this.cache.getRepos(), ...registeredPaths]);
-
-    // For incremental scans, skip any path already cached across all repos
-    const cachedPaths = force
-      ? new Set<string>()
-      : new Set(this.cache.getAll().map(a => a.path));
-
-    const seen = new Set<string>();
-    const toScan: Array<{ filePath: string; root: string }> = [];
-    for (const root of roots) {
-      for (const filePath of walkFiles(root)) {
-        if (!seen.has(filePath) && this.analyzer.isSupportedFile(filePath) && !cachedPaths.has(filePath)) {
-          const ext = path.extname(filePath);
-          if (shouldExcludeFile(filePath, ext, this.config.scanExcludePatterns)) continue;
-          seen.add(filePath);
-          toScan.push({ filePath, root });
-        }
-      }
-    }
-
-    this.broadcast({ type: 'scan_start', scanTotal: toScan.length } satisfies WSMessage);
-    console.error(`[gate-keeper] Scan: ${toScan.length} files across ${roots.size} workspace(s)`);
-    this.appendScanLog(`Scan started: ${toScan.length} files across ${roots.size} workspace(s)`, 'info');
-
-    if (toScan.length === 0) {
-      this.broadcast({ type: 'scan_complete', scanTotal: 0, scanAnalyzed: 0 } satisfies WSMessage);
-      this.appendScanLog('Scan complete: 0 files', 'info');
-      this.scanning = false;
-      return;
-    }
-
-    const CONCURRENCY = 8;
-    let analyzed = 0;
-    let lastProgress = 0;
-    for (let i = 0; i < toScan.length; i += CONCURRENCY) {
-      const batch = toScan.slice(i, i + CONCURRENCY);
-      await Promise.all(
-        batch.map(async ({ filePath, root }) => {
-          try {
-            const analysis = await this.analyzer.analyze(filePath);
-            if (!analysis) return;
-            analysis.repoRoot = root;
-            this.cache.save(analysis);
-            this.graphFor(root).upsert(analysis);
-            analyzed++;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[gate-keeper] Scan error for ${filePath}: ${msg}`);
-            this.appendScanLog(`Scan error for ${path.basename(filePath)}: ${msg}`, 'error');
-          }
-        })
-      );
-      // Send progress every 50 files instead of per-file updates
-      if (analyzed - lastProgress >= 50 || i + CONCURRENCY >= toScan.length) {
-        this.broadcast({ type: 'scan_progress', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
-        this.appendScanLog(`Scan progress: ${analyzed}/${toScan.length}`, 'info');
-        lastProgress = analyzed;
-      }
-      // Yield to event loop so HTTP/WS remain responsive
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
-
-    // Send full graph data at completion so dashboard renders everything at once
-    const completionRoots = new Set(toScan.map(s => s.root));
-    for (const root of completionRoots) {
-      this.broadcast({ type: 'init', data: this.graphFor(root).toGraphData() } satisfies WSMessage, root);
-    }
-    this.broadcast({
-      type: 'scan_complete',
-      scanTotal: toScan.length,
-      scanAnalyzed: analyzed
-    } satisfies WSMessage);
-    console.error(`[gate-keeper] Scan complete: ${analyzed}/${toScan.length}`);
-    this.appendScanLog(`Scan complete: ${analyzed}/${toScan.length}`, 'info');
-    this.scanning = false;
-  }
-
-  broadcastRepoCreated(repo: RepoMetadata): void {
-    this.broadcast({ type: 'repo_created', repo } satisfies WSMessage);
-  }
-
-  async scanRepo(repoRoot: string, force = false): Promise<void> {
-    if (this.scanning) return;
-    this.scanning = true;
-
-    const cachedPaths = force
-      ? new Set<string>()
-      : new Set(this.cache.getAll(repoRoot).map(a => a.path));
-    const toScan: string[] = [];
-    for (const filePath of walkFiles(repoRoot)) {
-      if (this.analyzer.isSupportedFile(filePath) && !cachedPaths.has(filePath)) {
-        const ext = path.extname(filePath);
-        if (shouldExcludeFile(filePath, ext, this.config.scanExcludePatterns)) continue;
-        toScan.push(filePath);
-      }
-    }
-
-    if (toScan.length === 0) {
-      this.appendScanLog(`Repo scan complete: 0 files for ${path.basename(repoRoot)}`, 'info');
-      this.scanning = false;
-      return;
-    }
-
-    this.broadcast({ type: 'scan_start', scanTotal: toScan.length } satisfies WSMessage);
-    console.error(`[gate-keeper] Scanning ${toScan.length} files for new repo: ${path.basename(repoRoot)}`);
-    this.appendScanLog(`Repo scan started: ${toScan.length} files for ${path.basename(repoRoot)}`, 'info');
-
-    const CONCURRENCY = 8;
-    let analyzed = 0;
-    let lastProgress = 0;
-    for (let i = 0; i < toScan.length; i += CONCURRENCY) {
-      const batch = toScan.slice(i, i + CONCURRENCY);
-      await Promise.all(
-        batch.map(async (filePath) => {
-          try {
-            const analysis = await this.analyzer.analyze(filePath);
-            if (!analysis) return;
-            analysis.repoRoot = repoRoot;
-            this.cache.save(analysis);
-            this.graphFor(repoRoot).upsert(analysis);
-            analyzed++;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[gate-keeper] Scan error for ${filePath}: ${msg}`);
-            this.appendScanLog(`Scan error for ${path.basename(filePath)}: ${msg}`, 'error');
-          }
-        })
-      );
-      // Send progress every 50 files instead of per-file updates
-      if (analyzed - lastProgress >= 50 || i + CONCURRENCY >= toScan.length) {
-        this.broadcast({ type: 'scan_progress', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
-        this.appendScanLog(`Repo scan progress: ${analyzed}/${toScan.length}`, 'info');
-        lastProgress = analyzed;
-      }
-      // Yield to event loop so HTTP/WS remain responsive
-      await new Promise(resolve => setTimeout(resolve, 0));
-    }
-
-    // Send full graph data at completion so dashboard renders everything at once
-    this.broadcast({ type: 'init', data: this.graphFor(repoRoot).toGraphData() } satisfies WSMessage, repoRoot);
-    this.broadcast({ type: 'scan_complete', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
-    console.error(`[gate-keeper] Repo scan complete: ${analyzed}/${toScan.length} for ${path.basename(repoRoot)}`);
-    this.appendScanLog(`Repo scan complete: ${analyzed}/${toScan.length} for ${path.basename(repoRoot)}`, 'info');
-    this.scanning = false;
-  }
-
-  pushAnalysis(analysis: FileAnalysis): void {
-    const repo = analysis.repoRoot ?? this.repoRoot;
-    const graph = this.graphFor(repo);
-    graph.upsert(analysis);
-
-    const graphData = graph.toGraphData();
-    const updatedNode = graphData.nodes.find(n => n.id === analysis.path);
-    const updatedEdges = graphData.edges.filter(
-      e => e.source === analysis.path || e.target === analysis.path
-    );
-
-    this.broadcast({
-      type: 'update',
-      delta: {
-        nodes: updatedNode ? [updatedNode] : [],
-        edges: updatedEdges as GraphEdge[]
-      },
-      analysis
-    } satisfies WSMessage, repo);
-
-    this.maybeAutoOpen(repo);
-  }
-
-  private broadcast(msg: WSMessage, repoFilter?: string): void {
-    const json = JSON.stringify(msg);
-    this.wss.clients.forEach(client => {
-      if (client.readyState !== WebSocket.OPEN) return;
-      const clientRepo = (client as FilteredClient).__repo;
-      // Send if client has no filter, or filters match, or message has no filter
-      if (!clientRepo || !repoFilter || clientRepo === repoFilter) {
-        client.send(json);
-      }
-    });
-  }
-
-  private mergedOverallRating(): number {
-    const graphs = Array.from(this.graphs.values());
-    if (graphs.length === 0) return 10;
-    const sum = graphs.reduce((a, g) => a + g.overallRating(), 0);
-    return Math.round((sum / graphs.length) * 10) / 10;
-  }
-
-  private maybeAutoOpen(repo: string): void {
-    if (this.hasAutoOpened) return;
-    const rating = this.graphs.get(repo)?.overallRating() ?? 10;
-    if (rating < 5.0) {
-      open(`http://localhost:${VIZ_PORT}/viz`, { wait: false }).catch(() => { });
-      this.hasAutoOpened = true;
-      console.error(`[gate-keeper] Architecture issues (rating ${rating}/10) — opening dashboard`);
-    }
   }
 
   start(): Promise<void> {

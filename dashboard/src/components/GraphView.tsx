@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import { GraphData, GraphNode, NodePosition } from '../types';
+import { useTheme } from '../ThemeContext';
 
 interface GraphViewProps {
   graphData: GraphData;
@@ -13,13 +14,6 @@ type SimNode = NodeObject<GraphNode>;
 type SimLink = LinkObject<GraphNode, { strength?: number; type?: string }>;
 type FGRef = ForceGraphMethods<SimNode, SimLink>;
 type FGWithData = { graphData(): { nodes: SimNode[] } };
-
-function ratingColor(rating: number): string {
-  if (rating >= 8) return '#22c55e';
-  if (rating >= 6) return '#eab308';
-  if (rating >= 4) return '#f97316';
-  return '#ef4444';
-}
 
 function langShape(type: string): string {
   switch (type) {
@@ -117,7 +111,14 @@ function useGraphForces(
   return { handleEngineStop };
 }
 
-function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<string>) {
+function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<string>, theme: any) {
+  const ratingColor = (r: number) => {
+    if (r >= 8) return theme.green;
+    if (r >= 6) return theme.yellow;
+    if (r >= 4) return theme.orange;
+    return theme.red;
+  };
+
   const paintNode = useCallback(
     (node: GraphNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const size = Math.max(5, (node.size ?? 1) * 6);
@@ -129,7 +130,7 @@ function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<
         ctx.save();
         ctx.beginPath();
         ctx.arc(node.x!, node.y!, size + 7, 0, 2 * Math.PI);
-        ctx.strokeStyle = '#3b82f6';
+        ctx.strokeStyle = theme.accent;
         ctx.lineWidth = 2;
         ctx.setLineDash([5, 3]);
         ctx.stroke();
@@ -138,9 +139,9 @@ function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<
       }
 
       ctx.beginPath();
-      ctx.fillStyle = isHighlighted ? '#fff' : color;
-      ctx.strokeStyle = isHighlighted ? '#fff' : `${color}55`;
-      ctx.lineWidth = isHighlighted ? 2.5 : 1;
+      ctx.fillStyle = isHighlighted ? theme.text : theme.cardBg;
+      ctx.strokeStyle = isHighlighted ? theme.accent : color;
+      ctx.lineWidth = isHighlighted ? 2.5 : 2;
 
       const shape = langShape(node.type);
       if (shape === 'square') {
@@ -158,12 +159,12 @@ function useNodePainter(highlightNodeId: string | undefined, selectedNodes: Set<
 
       const fontSize = Math.max(10, Math.min(14, 12 / globalScale));
       ctx.font = `${isHighlighted ? 'bold ' : ''}${fontSize}px ui-monospace, "SF Mono", monospace`;
-      ctx.fillStyle = isHighlighted ? '#fff' : '#cbd5e1';
+      ctx.fillStyle = isHighlighted ? theme.accent : theme.textMuted;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillText(node.label, node.x!, node.y! + size + 3);
     },
-    [highlightNodeId, selectedNodes]
+    [highlightNodeId, selectedNodes, theme]
   );
 
   const paintPointerArea = useCallback(
@@ -288,12 +289,13 @@ function useNodeInteraction(
 }
 
 export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRepo }: GraphViewProps) {
+  const { T } = useTheme();
   const fgRef = useRef<FGRef | undefined>(undefined);
   const { pinnedRef, initVersion, hasAutoFitted } = useNodePositions(selectedRepo, graphData.nodes.length);
   const { handleEngineStop } = useGraphForces(fgRef, graphData.nodes.length, hasAutoFitted, pinnedRef);
   const { selectedNodes, handleNodeClick, handleNodeDrag, handleNodeDragEnd, handleClearSelection } =
     useNodeInteraction(onNodeClick, selectedRepo, fgRef, pinnedRef);
-  const { paintNode, paintPointerArea } = useNodePainter(highlightNodeId, selectedNodes);
+  const { paintNode, paintPointerArea } = useNodePainter(highlightNodeId, selectedNodes, T);
 
   // Rebuild forceData only when graphData changes or initial positions finish loading.
   // Drag-end writes go to pinnedRef directly — no state update, no simulation restart.
@@ -328,21 +330,21 @@ export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRep
   const multiSelectCount = selectedNodes.size;
 
   return (
-    <div style={{ flex: 1, position: 'relative', background: '#0a0f1e', overflow: 'hidden' }}>
+    <div style={{ flex: 1, position: 'relative', background: T.bg, overflow: 'hidden' }}>
 
       {graphData.nodes.length === 0 && (
         <div style={{
           position: 'absolute', inset: 0,
           display: 'flex', flexDirection: 'column',
           alignItems: 'center', justifyContent: 'center',
-          gap: 12, color: '#1e293b', pointerEvents: 'none'
+          gap: 12, color: T.textFaint, pointerEvents: 'none'
         }}>
           <svg width="64" height="64" viewBox="0 0 64 64" fill="none">
-            <path d="M32 4L58 18V46L32 60L6 46V18L32 4Z" stroke="#1e293b" strokeWidth="2" fill="none" />
-            <path d="M32 20L44 27V41L32 48L20 41V27L32 20Z" stroke="#263347" strokeWidth="1.5" fill="none" />
+            <path d="M32 4L58 18V46L32 60L6 46V18L32 4Z" stroke={T.border} strokeWidth="2" fill="none" />
+            <path d="M32 20L44 27V41L32 48L20 41V27L32 20Z" stroke={T.textDim} strokeWidth="1.5" fill="none" />
           </svg>
-          <div style={{ fontSize: 16, color: '#334155', fontWeight: 600 }}>No files analyzed</div>
-          <div style={{ fontSize: 13, color: '#1e293b' }}>Click "Scan All Files" to analyze your workspace</div>
+          <div style={{ fontSize: 16, color: T.textMuted, fontWeight: 600 }}>No files analyzed</div>
+          <div style={{ fontSize: 13, color: T.textFaint }}>Click "Scan All Files" to analyze your workspace</div>
         </div>
       )}
 
@@ -357,7 +359,7 @@ export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRep
         nodeCanvasObjectMode={() => 'replace'}
         nodePointerAreaPaint={(n, color, ctx) => paintPointerArea(n as GraphNode, color, ctx)}
         linkColor={(link: SimLink) =>
-          link.type === 'import' ? 'rgba(59,130,246,0.25)' : 'rgba(249,115,22,0.25)'
+          link.type === 'import' ? T.edgeDefault : T.edgeCircular
         }
         linkWidth={(link: SimLink) => Math.max(0.5, (link.strength ?? 1) * 1.2)}
         linkDirectionalArrowLength={5}
@@ -369,7 +371,7 @@ export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRep
         onEngineStop={handleEngineStop}
         cooldownTicks={120}
         warmupTicks={40}
-        backgroundColor="#0a0f1e"
+        backgroundColor={T.bg}
         d3AlphaDecay={0.015}
         d3VelocityDecay={0.25}
       />
@@ -377,26 +379,26 @@ export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRep
       {/* Legend */}
       <div style={{
         position: 'absolute', bottom: 16, left: 16,
-        background: 'rgba(17,24,39,0.9)', border: '1px solid #1e293b',
-        borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#64748b',
-        backdropFilter: 'blur(4px)'
+        background: T.panel, border: `1px solid ${T.border}`,
+        borderRadius: 8, padding: '10px 14px', fontSize: 12, color: T.textMuted,
+        boxShadow: T.shadow
       }}>
-        <div style={{ fontWeight: 600, marginBottom: 8, color: '#94a3b8', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8 }}>Legend</div>
-        <div style={{ marginBottom: 3 }}>● TypeScript / JS</div>
-        <div style={{ marginBottom: 3 }}>■ C#</div>
-        <div style={{ marginBottom: 8 }}>▲ React (TSX / JSX)</div>
-        <div style={{ display: 'flex', gap: 10, borderTop: '1px solid #1e293b', paddingTop: 8 }}>
-          <span style={{ color: '#22c55e' }}>■</span><span>≥ 8</span>
-          <span style={{ color: '#eab308' }}>■</span><span>≥ 6</span>
-          <span style={{ color: '#f97316' }}>■</span><span>≥ 4</span>
-          <span style={{ color: '#ef4444' }}>■</span><span>&lt; 4</span>
+        <div style={{ fontWeight: 600, marginBottom: 8, color: T.text, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.8 }}>Legend</div>
+        <div style={{ marginBottom: 3, color: T.text }}>● TypeScript / JS</div>
+        <div style={{ marginBottom: 3, color: T.text }}>■ C#</div>
+        <div style={{ marginBottom: 8, color: T.text }}>▲ React (TSX / JSX)</div>
+        <div style={{ display: 'flex', gap: 10, borderTop: `1px solid ${T.border}`, paddingTop: 8 }}>
+          <span style={{ color: T.green }}>■</span><span>≥ 8</span>
+          <span style={{ color: T.yellow }}>■</span><span>≥ 6</span>
+          <span style={{ color: T.orange }}>■</span><span>≥ 4</span>
+          <span style={{ color: T.red }}>■</span><span>&lt; 4</span>
         </div>
       </div>
 
       {/* Interaction hints */}
       <div style={{
         position: 'absolute', bottom: 16, right: 16,
-        fontSize: 11, color: '#1e293b', pointerEvents: 'none',
+        fontSize: 11, color: T.textFaint, pointerEvents: 'none',
         textAlign: 'right', lineHeight: 1.8
       }}>
         <div>click node to open details</div>
@@ -407,10 +409,10 @@ export function GraphView({ graphData, onNodeClick, highlightNodeId, selectedRep
       {multiSelectCount > 1 && (
         <div style={{
           position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
-          background: 'rgba(59,130,246,0.15)', border: '1px solid #3b82f6',
+          background: `${T.accent}26`, border: `1px solid ${T.accent}`,
           borderRadius: 20, padding: '5px 14px',
-          fontSize: 12, color: '#93c5fd',
-          backdropFilter: 'blur(4px)',
+          fontSize: 12, color: T.accent,
+          boxShadow: T.shadow,
           pointerEvents: 'none'
         }}>
           {multiSelectCount} nodes selected — drag any to move group
