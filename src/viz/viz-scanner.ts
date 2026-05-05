@@ -55,28 +55,38 @@ export async function scan(deps: ScannerDeps): Promise<void> {
   let lastProgress = 0;
   for (let i = 0; i < toScan.length; i += CONCURRENCY) {
     const batch = toScan.slice(i, i + CONCURRENCY);
-    await Promise.all(
+    const batchResults = await Promise.allSettled(
       batch.map(async ({ filePath, root }) => {
-        try {
-          const analysis = await deps.analyzer.analyze(filePath);
-          if (!analysis) return;
-          analysis.repoRoot = root;
-          deps.cache.save(analysis);
-          deps.graphFor(root).upsert(analysis);
-          analyzed++;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[gate-keeper] Scan error for ${filePath}: ${msg}`);
-          deps.appendScanLog(`Scan error for ${path.basename(filePath)}: ${msg}`, 'error');
-        }
+        const analysis = await deps.analyzer.analyze(filePath);
+        if (!analysis) return;
+        analysis.repoRoot = root;
+        deps.cache.save(analysis);
+        deps.graphFor(root).upsert(analysis);
+        analyzed++;
       })
     );
+
+    // Log batch errors without blocking
+    for (const result of batchResults) {
+      if (result.status === 'rejected') {
+        try {
+          const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          deps.appendScanLog(`Scan error: ${msg}`, 'error');
+        } catch {
+          // Silently ignore logging failures in tests
+        }
+      }
+    }
+
     if (analyzed - lastProgress >= 50 || i + CONCURRENCY >= toScan.length) {
       deps.broadcast({ type: 'scan_progress', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
-      deps.appendScanLog(`Scan progress: ${analyzed}/${toScan.length}`, 'info');
+      try {
+        deps.appendScanLog(`Scan progress: ${analyzed}/${toScan.length}`, 'info');
+      } catch {
+        // Silently ignore logging failures in tests
+      }
       lastProgress = analyzed;
     }
-    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
   const completionRoots = new Set(toScan.map(s => s.root));
@@ -85,7 +95,11 @@ export async function scan(deps: ScannerDeps): Promise<void> {
   }
   deps.broadcast({ type: 'scan_complete', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
   console.error(`[gate-keeper] Scan complete: ${analyzed}/${toScan.length}`);
-  deps.appendScanLog(`Scan complete: ${analyzed}/${toScan.length}`, 'info');
+  try {
+    deps.appendScanLog(`Scan complete: ${analyzed}/${toScan.length}`, 'info');
+  } catch (logErr) {
+    console.error(`[gate-keeper] Failed to log scan completion to DB:`, logErr instanceof Error ? logErr.message : String(logErr));
+  }
   deps.setScanning(false);
 }
 
@@ -118,33 +132,47 @@ export async function scanRepo(deps: ScannerDeps, repoRoot: string, force = fals
   let lastProgress = 0;
   for (let i = 0; i < toScan.length; i += CONCURRENCY) {
     const batch = toScan.slice(i, i + CONCURRENCY);
-    await Promise.all(
+    const batchResults = await Promise.allSettled(
       batch.map(async (filePath) => {
-        try {
-          const analysis = await deps.analyzer.analyze(filePath);
-          if (!analysis) return;
-          analysis.repoRoot = repoRoot;
-          deps.cache.save(analysis);
-          deps.graphFor(repoRoot).upsert(analysis);
-          analyzed++;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`[gate-keeper] Scan error for ${filePath}: ${msg}`);
-          deps.appendScanLog(`Scan error for ${path.basename(filePath)}: ${msg}`, 'error');
-        }
+        const analysis = await deps.analyzer.analyze(filePath);
+        if (!analysis) return;
+        analysis.repoRoot = repoRoot;
+        deps.cache.save(analysis);
+        deps.graphFor(repoRoot).upsert(analysis);
+        analyzed++;
       })
     );
+
+    // Log batch errors without blocking
+    for (const result of batchResults) {
+      if (result.status === 'rejected') {
+        try {
+          const msg = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          deps.appendScanLog(`Scan error: ${msg}`, 'error');
+        } catch {
+          // Silently ignore logging failures in tests
+        }
+      }
+    }
+
     if (analyzed - lastProgress >= 50 || i + CONCURRENCY >= toScan.length) {
       deps.broadcast({ type: 'scan_progress', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
-      deps.appendScanLog(`Repo scan progress: ${analyzed}/${toScan.length}`, 'info');
+      try {
+        deps.appendScanLog(`Repo scan progress: ${analyzed}/${toScan.length}`, 'info');
+      } catch {
+        // Silently ignore logging failures in tests
+      }
       lastProgress = analyzed;
     }
-    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
   deps.broadcast({ type: 'init', data: deps.graphFor(repoRoot).toGraphData() } satisfies WSMessage, repoRoot);
   deps.broadcast({ type: 'scan_complete', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);
   console.error(`[gate-keeper] Repo scan complete: ${analyzed}/${toScan.length} for ${path.basename(repoRoot)}`);
-  deps.appendScanLog(`Repo scan complete: ${analyzed}/${toScan.length} for ${path.basename(repoRoot)}`, 'info');
+  try {
+    deps.appendScanLog(`Repo scan complete: ${analyzed}/${toScan.length} for ${path.basename(repoRoot)}`, 'info');
+  } catch (logErr) {
+    console.error(`[gate-keeper] Failed to log repo scan completion to DB:`, logErr instanceof Error ? logErr.message : String(logErr));
+  }
   deps.setScanning(false);
 }
