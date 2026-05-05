@@ -1,8 +1,8 @@
 # CLAUDE.md
 
-@.github/instructions/gate-keeper-quality-check.instructions.md
-
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+**Quality Checks:** @.github/instructions/gate-keeper-quality-check.instructions.md
 
 ## Commands
 

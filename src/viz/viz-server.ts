@@ -9,6 +9,8 @@ import { DependencyGraph, CycleInfo } from '../graph/dependency-graph';
 import { SqliteCache } from '../cache/sqlite-cache';
 import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { RatingCalculator } from '../rating/rating-calculator';
+import { PatternDetector } from '../analyzer/pattern-detector';
+import { RefactoringAdvisor } from '../analyzer/refactoring-advisor';
 import { FileAnalysis, Config, GraphData, GraphNode, GraphEdge, RepoMetadata, WSMessage } from '../types';
 
 const VIZ_PORT = 5378;
@@ -121,6 +123,8 @@ export class VizServer {
   private cache: SqliteCache;
   private analyzer: UniversalAnalyzer;
   private ratingCalc = new RatingCalculator();
+  private patternDetector = new PatternDetector();
+  private refactoringAdvisor = new RefactoringAdvisor();
   private hasAutoOpened = false;
   private scanning = false;
   private workDir: string;
@@ -299,7 +303,16 @@ export class VizServer {
         analysis.dependencies
       );
 
-      res.json({ analysis, ratingBreakdown: breakdown, gitDiff: getGitDiffStats(filePath) });
+      const graph = this.graphs.get(repo);
+      const cycles = graph ? graph.detectCycles() : [];
+      const refactoringHints = this.refactoringAdvisor.suggest(analysis, cycles);
+
+      res.json({
+        analysis,
+        ratingBreakdown: breakdown,
+        gitDiff: getGitDiffStats(filePath),
+        refactoringHints,
+      });
     });
 
     this.app.get('/api/positions', (req, res) => {
@@ -417,6 +430,13 @@ export class VizServer {
         const msg = err instanceof Error ? err.message : String(err);
         res.status(500).json({ error: msg });
       }
+    });
+
+    this.app.get('/api/patterns', (req, res) => {
+      const repo = req.query['repo'] as string | undefined;
+      const analyses = this.cache.getAll(repo);
+      const reports = this.patternDetector.detect(analyses);
+      res.json(reports);
     });
   }
 

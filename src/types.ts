@@ -136,3 +136,22 @@ export interface SessionCreatePayload {
     session_type: 'github-copilot' | 'claude';
   };
 }
+
+export interface RefactoringHint {
+  patternName: string;
+  violationType: string;
+  rationale: string;
+  steps: string[];
+  estimatedRatingGain: number;
+  priority: 'high' | 'medium' | 'low';
+}
+
+export interface PatternReport {
+  violationType: string;
+  severity: 'error' | 'warning' | 'info';
+  fileCount: number;
+  totalOccurrences: number;
+  affectedFiles: string[];
+  estimatedRatingGain: number;
+  moduleSuggestion: string;
+}

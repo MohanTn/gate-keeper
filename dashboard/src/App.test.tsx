@@ -12,7 +12,7 @@ function globToRegex(pattern: string): RegExp {
         .replace(/\*\*/g, '__GLOBSTAR__')
         .replace(/\*/g, '[^/]*')
         .replace(/__GLOBSTAR__/g, '.*');
-    return new RegExp(escaped, 'i');
+    return new RegExp(`^${escaped}$`, 'i');
 }
 
 function matchesAnyPattern(filePath: string, patterns: Array<{ pattern: string }>): boolean {

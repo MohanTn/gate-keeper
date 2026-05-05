@@ -18,7 +18,10 @@ import { spawnSync } from 'child_process';
 import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { StringAnalyzer, StringAnalysisResult } from '../analyzer/string-analyzer';
 import { RatingCalculator, RatingBreakdownItem } from '../rating/rating-calculator';
-import { FileAnalysis, Language } from '../types';
+import { RefactoringAdvisor } from '../analyzer/refactoring-advisor';
+import { PatternDetector } from '../analyzer/pattern-detector';
+import { CycleInfo } from '../graph/dependency-graph';
+import { FileAnalysis, Language, RefactoringHint, PatternReport } from '../types';
 
 // ── Configuration ──────────────────────────────────────────
 
@@ -34,6 +37,8 @@ const SKIP_DIRS = new Set([
 const fileAnalyzer = new UniversalAnalyzer();
 const stringAnalyzer = new StringAnalyzer();
 const ratingCalc = new RatingCalculator();
+const refactoringAdvisor = new RefactoringAdvisor();
+const patternDetector = new PatternDetector();
 
 // ── Helpers ────────────────────────────────────────────────
 
@@ -286,6 +291,61 @@ const TOOLS = [
       required: ['file_path'],
     },
   },
+  {
+    name: 'suggest_refactoring',
+    description:
+      'Analyze a file and return a ranked list of concrete refactoring hints: ' +
+      'pattern name, rationale, step-by-step instructions, and estimated rating gain. ' +
+      'Use this when a file has violations to understand the highest-impact improvements.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        file_path: {
+          type: 'string',
+          description: 'Absolute path to the source file to analyze (.ts, .tsx, .jsx, .js, .cs)',
+        },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'predict_impact_with_remediation',
+    description:
+      'Find all files that transitively depend on the given file (blast radius), ' +
+      'then for each at-risk dependent (rating < 6) provide targeted fix instructions. ' +
+      'Use this before changing a widely-imported module.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        file_path: {
+          type: 'string',
+          description: 'Absolute path to the file being changed',
+        },
+        repo: {
+          type: 'string',
+          description: 'Repository root path (defaults to git root of file_path)',
+        },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'get_violation_patterns',
+    description:
+      'Return a ranked table of violation patterns across the entire codebase: ' +
+      'which violation types appear most, how many files they affect, ' +
+      'the total estimated rating gain if fixed, and a module-wide fix suggestion. ' +
+      'Use this to plan a codebase cleanup sprint.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        repo: {
+          type: 'string',
+          description: 'Repository root path (defaults to git root of cwd)',
+        },
+      },
+    },
+  },
 ];
 
 // ── Tool handlers ──────────────────────────────────────────
@@ -306,6 +366,12 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
       return handleDependencyGraph(args);
     case 'get_impact_analysis':
       return handleImpactAnalysis(args);
+    case 'suggest_refactoring':
+      return handleSuggestRefactoring(args);
+    case 'predict_impact_with_remediation':
+      return handlePredictImpactWithRemediation(args);
+    case 'get_violation_patterns':
+      return handleViolationPatterns(args);
     default:
       return text(`Unknown tool: ${name}`);
   }
@@ -768,6 +834,208 @@ async function handleImpactAnalysis(args: Record<string, unknown>) {
 
   if (allDeps.size === 0) {
     lines.push('No other files depend on this file. Changes here have no downstream impact.');
+  }
+
+  return text(lines.join('\n'));
+}
+
+async function handleSuggestRefactoring(args: Record<string, unknown>) {
+  const filePath = String(args.file_path ?? '');
+  if (!filePath) return text('Error: file_path is required.');
+  if (!fs.existsSync(filePath)) return text(`Error: File not found: ${filePath}`);
+  if (!fileAnalyzer.isSupportedFile(filePath)) {
+    return text(`Error: Unsupported file type. Supported: .ts, .tsx, .jsx, .js, .cs`);
+  }
+
+  const analysis = await fileAnalyzer.analyze(filePath);
+  if (!analysis) return text('Error: Analysis returned no results.');
+
+  const repo = findGitRoot(path.dirname(filePath));
+  const encodedRepo = encodeURIComponent(repo);
+  const cyclesRaw = await fetchDaemonApi(`/api/cycles?repo=${encodedRepo}`);
+  const cycles = (cyclesRaw ?? []) as CycleInfo[];
+
+  const hints = refactoringAdvisor.suggest(analysis, cycles);
+
+  if (hints.length === 0) {
+    return text(`## Refactoring Suggestions: ${path.basename(filePath)}\n\nNo refactoring hints — file looks clean!`);
+  }
+
+  const lines = [
+    `## Refactoring Suggestions: ${path.basename(filePath)}`,
+    `**Current Rating: ${analysis.rating}/10** | **${hints.length} hint(s) found**`,
+    `**Total Potential Gain: +${Math.round(hints.reduce((s, h) => s + h.estimatedRatingGain, 0) * 10) / 10} pts**`,
+    '',
+  ];
+
+  hints.forEach((hint, i) => {
+    const priorityIcon = hint.priority === 'high' ? '🔴' : hint.priority === 'medium' ? '🟡' : '🟢';
+    lines.push(`### ${i + 1}. ${hint.patternName} ${priorityIcon}`);
+    lines.push(`**Pattern:** \`${hint.violationType}\` | **Estimated Gain:** +${hint.estimatedRatingGain} pts`);
+    lines.push(`**Why:** ${hint.rationale}`);
+    lines.push('**Steps:**');
+    hint.steps.forEach((step, j) => lines.push(`${j + 1}. ${step}`));
+    lines.push('');
+  });
+
+  return text(lines.join('\n'));
+}
+
+async function handlePredictImpactWithRemediation(args: Record<string, unknown>) {
+  const filePath = String(args.file_path ?? '');
+  if (!filePath) return text('Error: file_path is required.');
+
+  const repo = String(args.repo ?? findGitRoot(path.dirname(filePath)));
+  const encodedRepo = encodeURIComponent(repo);
+
+  const [graphRaw, cyclesRaw] = await Promise.all([
+    fetchDaemonApi(`/api/graph?repo=${encodedRepo}`),
+    fetchDaemonApi(`/api/cycles?repo=${encodedRepo}`),
+  ]);
+
+  if (!graphRaw) {
+    return text('Error: Gate Keeper daemon is not running. Start it with `npm run daemon` or `npm run dev`.');
+  }
+
+  const graph = graphRaw as GraphResponse;
+  const cycles = (cyclesRaw ?? []) as CycleInfo[];
+
+  // ── BFS (identical to handleImpactAnalysis) ──────────────
+  const reverseAdj = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const sources = reverseAdj.get(edge.target) ?? [];
+    sources.push(edge.source);
+    reverseAdj.set(edge.target, sources);
+  }
+
+  const directDeps = new Set(reverseAdj.get(filePath) ?? []);
+  const allDeps = new Set<string>();
+  const queue = [...directDeps];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (allDeps.has(current)) continue;
+    allDeps.add(current);
+    for (const next of reverseAdj.get(current) ?? []) {
+      if (!allDeps.has(next)) queue.push(next);
+    }
+  }
+
+  const lines: string[] = [];
+  lines.push(`## Impact + Remediation: ${path.basename(filePath)}`);
+  lines.push(`**Path:** ${filePath}`);
+  lines.push(`**Direct dependents:** ${directDeps.size} | **Total affected (transitive):** ${allDeps.size}`);
+  lines.push('');
+
+  if (directDeps.size > 0) {
+    lines.push('### Direct Dependents');
+    for (const dep of directDeps) {
+      const node = graph.nodes.find(n => n.id === dep);
+      const ratingStr = node ? ` (rating: ${node.rating}, ${node.violations.length} violations)` : '';
+      lines.push(`- ${path.relative(repo, dep)}${ratingStr}`);
+    }
+    lines.push('');
+  }
+
+  const transitiveDeps = [...allDeps].filter(d => !directDeps.has(d));
+  if (transitiveDeps.length > 0) {
+    lines.push('### Transitive Dependents');
+    for (const dep of transitiveDeps.slice(0, 20)) {
+      const node = graph.nodes.find(n => n.id === dep);
+      const ratingStr = node ? ` (rating: ${node.rating})` : '';
+      lines.push(`- ${path.relative(repo, dep)}${ratingStr}`);
+    }
+    if (transitiveDeps.length > 20) lines.push(`... and ${transitiveDeps.length - 20} more`);
+    lines.push('');
+  }
+
+  const affectedNodes = graph.nodes.filter(n => allDeps.has(n.id));
+  const atRisk = affectedNodes.filter(n => n.rating < 6).sort((a, b) => a.rating - b.rating);
+
+  if (atRisk.length > 0) {
+    lines.push(`### Remediation Plan for At-Risk Dependents (${atRisk.length} files with rating < 6)`);
+    lines.push('These files already have quality issues and need targeted fixes:');
+    lines.push('');
+
+    const remediationTargets = atRisk.slice(0, 5);
+    for (const node of remediationTargets) {
+      lines.push(`#### ${path.relative(repo, node.id)} — Rating: ${node.rating}/10`);
+
+      let hints: RefactoringHint[] = [];
+      if (fs.existsSync(node.id) && fileAnalyzer.isSupportedFile(node.id)) {
+        const freshAnalysis = await fileAnalyzer.analyze(node.id);
+        if (freshAnalysis) {
+          hints = refactoringAdvisor.suggest(freshAnalysis, cycles);
+        }
+      }
+
+      if (hints.length === 0) {
+        lines.push(`- ${node.violations.length} violations detected. Re-analyze with \`analyze_file\` for specific hints.`);
+      } else {
+        lines.push(`**Top fix (${hints[0].patternName}):** ${hints[0].rationale}`);
+        hints[0].steps.slice(0, 3).forEach((step, i) => lines.push(`${i + 1}. ${step}`));
+        if (hints.length > 1) lines.push(`_(and ${hints.length - 1} more hints — use \`suggest_refactoring\` for full detail)_`);
+      }
+      lines.push('');
+    }
+
+    if (atRisk.length > 5) {
+      lines.push(`... and ${atRisk.length - 5} more at-risk files. Use \`suggest_refactoring\` on each.`);
+    }
+  } else if (allDeps.size > 0) {
+    lines.push('No at-risk dependents (all affected files have rating ≥ 6). Change appears safe.');
+  }
+
+  if (allDeps.size === 0) {
+    lines.push('No other files depend on this file. Changes here have no downstream impact.');
+  }
+
+  return text(lines.join('\n'));
+}
+
+async function handleViolationPatterns(args: Record<string, unknown>) {
+  const repo = String(args.repo ?? findGitRoot(process.cwd()));
+  const encodedRepo = encodeURIComponent(repo);
+
+  let reports: PatternReport[] | null = null;
+  const daemonRaw = await fetchDaemonApi(`/api/patterns?repo=${encodedRepo}`);
+  if (daemonRaw && Array.isArray(daemonRaw)) {
+    reports = daemonRaw as PatternReport[];
+  }
+
+  if (!reports) {
+    const files = findSourceFiles(repo, 200);
+    const analyses: FileAnalysis[] = [];
+    for (const f of files) {
+      const a = await fileAnalyzer.analyze(f);
+      if (a) analyses.push(a);
+    }
+    reports = patternDetector.detect(analyses);
+  }
+
+  if (reports.length === 0) {
+    return text(`## Violation Patterns\n\nNo violations found across the codebase. Everything looks clean!`);
+  }
+
+  const totalGain = Math.round(reports.reduce((s, r) => s + r.estimatedRatingGain, 0) * 10) / 10;
+  const lines = [
+    `## Violation Patterns — ${path.basename(repo)}`,
+    `**${reports.length} distinct violation types** across the codebase | **Total estimated gain if all fixed: +${totalGain} pts**`,
+    '',
+    '| Rank | Pattern | Severity | Files | Occurrences | Est. Gain |',
+    '|------|---------|----------|-------|-------------|-----------|',
+  ];
+
+  reports.forEach((r, i) => {
+    const sev = r.severity === 'error' ? '🔴 error' : r.severity === 'warning' ? '🟡 warning' : '🟢 info';
+    lines.push(`| ${i + 1} | \`${r.violationType}\` | ${sev} | ${r.fileCount} | ${r.totalOccurrences} | +${r.estimatedRatingGain} |`);
+  });
+
+  lines.push('');
+  lines.push('### Module-Wide Fix Suggestions (top 5 by impact)');
+  for (const r of reports.slice(0, 5)) {
+    lines.push(`**\`${r.violationType}\`** — ${r.moduleSuggestion}`);
+    lines.push(`  Affects: ${r.affectedFiles.slice(0, 3).map(f => path.relative(repo, f)).join(', ')}${r.fileCount > 3 ? ` ... and ${r.fileCount - 3} more` : ''}`);
+    lines.push('');
   }
 
   return text(lines.join('\n'));

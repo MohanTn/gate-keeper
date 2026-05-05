@@ -200,6 +200,52 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect }: DetailPa
           </Section>
         )}
 
+        {/* Refactoring Hints */}
+        {detail?.refactoringHints && detail.refactoringHints.length > 0 && (
+          <Section label={`Refactoring Hints (${detail.refactoringHints.length})`}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {detail.refactoringHints.map((hint, i) => (
+                <div key={i} style={{
+                  background: T.elevated,
+                  border: `1px solid ${hint.priority === 'high' ? T.red : hint.priority === 'medium' ? T.yellow : T.accent}`,
+                  borderRadius: 6,
+                  padding: '10px 12px',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{hint.patternName}</div>
+                      <div style={{ fontSize: 11, color: T.textDim, marginTop: 2 }}>{hint.violationType}</div>
+                    </div>
+                    <div style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      color: T.green,
+                      backgroundColor: T.elevated,
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      whiteSpace: 'nowrap',
+                      flexShrink: 0,
+                    }}>
+                      +{hint.estimatedRatingGain}
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: T.text, lineHeight: 1.4, marginBottom: 6 }}>
+                    {hint.rationale}
+                  </div>
+                  <div style={{ fontSize: 11, color: T.textDim }}>
+                    <div style={{ marginBottom: 4, fontWeight: 600, color: T.textMuted }}>Steps:</div>
+                    <ol style={{ margin: '0 0 0 16px', paddingLeft: 0 }}>
+                      {hint.steps.map((step, j) => (
+                        <li key={j} style={{ marginBottom: 3, color: T.textDim }}>{step}</li>
+                      ))}
+                    </ol>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
         {/* Dependencies (imports from this file) */}
         {deps.length > 0 && (
           <Section label={`Imports (${deps.length})`}>

@@ -97,3 +97,35 @@ Fix violations in this order (highest impact first):
 - Leave empty catch blocks — always handle or log errors
 - Write methods longer than 50 lines
 - Ignore circular dependency warnings — they compound rating penalties
+
+---
+
+## New Tools — Use These Proactively
+
+### After fixing violations
+
+Call `suggest_refactoring` after `analyze_file` returns a rating below 7.0. This gives you ranked, step-by-step instructions specific to the violations found.
+
+### Before editing a widely-imported file
+
+Call `predict_impact_with_remediation` before editing any file that is imported by many others. This identifies at-risk downstream files and provides targeted remediation steps.
+
+### Starting a cleanup sprint
+
+Call `get_violation_patterns` to get a ranked table of all violation types across the codebase with estimated rating gains. This tells you where to spend effort first.
+
+## Quality Thresholds Reference
+
+- Minimum passing rating: **7.0/10**
+- Error violations: −1.5 pts each
+- Warning violations: −0.5 pts each
+- Info violations: −0.1 pts each
+- Cyclomatic complexity >20: −2.0 | >10: −1.0
+- Import count >30: −2.0 | >15: −0.5
+- Lines of code >500: −1.5 | >300: −0.5
+- Circular dependency: −1.0 per cycle
+- Test coverage <30%: −2.5 | <50%: −2.0 | <80%: −1.0
+
+## MCP Server Setup
+
+The Gate Keeper MCP server runs via `npm run mcp:dev`. Configure it in VS Code via `.vscode/mcp.json` (see `docs/copilot-setup.md`).

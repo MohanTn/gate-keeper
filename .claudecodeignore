@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+vendor/
+.venv/
+env/
+
+# Build outputs
+dist/
+build/
+out/
+*.exe
+*.dll
+
+# Large data and logs
+*.log
+data/*.csv
+data/*.json
+docs/_site/
+
+# Media and binary files
+*.png
+*.jpg
+*.mp4
+*.pdf
+
+# Secrets (For security)
+.env
+*.pem

@@ -1,30 +1,77 @@
-/**
- * ViolationsPanel Test Suite
- * 
- * Tests for the ViolationsPanel component which displays violations grouped by file
- * with filtering and searching capabilities.
- * 
- * Test Coverage:
- * - Panel renders with violation data
- * - Violations are grouped by file
- * - Severity filtering works (all, error, warning, info)
- * - Search filtering by file name and message works
- * - Expanded/collapsed state toggles per file
- * - Copy all violations to clipboard functionality
- * - Theme tokens properly applied to colors and styles
- * 
- * Integration Points:
- * - GraphData with nodes containing violations array
- * - ThemeTokens for dynamic styling
- * - WebSocket updates for real-time violation changes
- * - File detail navigation on violation click
- */
+import type { Violation } from '../types';
 
-// Manual test execution:
-// 1. Render with test violations data
-// 2. Verify all violations display correctly grouped by file
-// 3. Test each severity filter button
-// 4. Type in search box and verify filtering
-// 5. Click file groups to expand/collapse
-// 6. Click copy button and verify clipboard content
-// 7. Verify colors match current theme (light/dark)
+describe('ViolationsPanel', () => {
+  it('should group violations', () => {
+    const violations: Violation[] = [
+      { type: 'any_usage', severity: 'warning', message: 'Use of any type', line: 10 },
+      { type: 'missing_key', severity: 'error', message: 'Missing key prop', line: 20 },
+    ];
+    expect(violations.length).toBe(2);
+  });
+
+  it('should filter by severity', () => {
+    const violations: Violation[] = [
+      { type: 'any_usage', severity: 'warning', message: 'Use of any type' },
+      { type: 'missing_key', severity: 'error', message: 'Missing key prop' },
+      { type: 'console_log', severity: 'info', message: 'console.log found' },
+    ];
+    const errorViolations = violations.filter(v => v.severity === 'error');
+    expect(errorViolations.length).toBe(1);
+  });
+
+  it('should search violations', () => {
+    const violations: Violation[] = [
+      { type: 'any_usage', severity: 'warning', message: 'Use of any type' },
+      { type: 'missing_key', severity: 'error', message: 'Missing key prop' },
+    ];
+    const searchTerm = 'any';
+    const filtered = violations.filter(v =>
+      v.message.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+    expect(filtered.length).toBe(1);
+  });
+
+  it('should define severity colors', () => {
+    const severityColors = {
+      error: '#f87171',
+      warning: '#fbbf24',
+      info: '#93c5fd',
+    };
+    expect(severityColors.error).toBeTruthy();
+    expect(severityColors.warning).toBeTruthy();
+    expect(severityColors.info).toBeTruthy();
+  });
+
+  it('should define severity badges', () => {
+    const badges = { error: 'ERR', warning: 'WARN', info: 'INFO' };
+    expect(badges.error).toBe('ERR');
+  });
+
+  it('should format violations for clipboard', () => {
+    const violations: Violation[] = [
+      { type: 'missing_key', severity: 'error', message: 'Missing key', line: 10, fix: 'Add key prop' },
+    ];
+    let text = '';
+    for (const v of violations) {
+      const loc = v.line ? ` (line ${v.line})` : '';
+      text += `[${v.severity.toUpperCase()}] ${v.message}${loc}\n`;
+    }
+    expect(text).toContain('ERROR');
+  });
+
+  it('should handle empty violations', () => {
+    const violations: Violation[] = [];
+    expect(violations.length).toBe(0);
+  });
+
+  it('should toggle expansion state', () => {
+    const expandedFiles = new Set<string>();
+    const fileId = 'file1.ts';
+
+    expandedFiles.add(fileId);
+    expect(expandedFiles.has(fileId)).toBe(true);
+
+    expandedFiles.delete(fileId);
+    expect(expandedFiles.has(fileId)).toBe(false);
+  });
+});

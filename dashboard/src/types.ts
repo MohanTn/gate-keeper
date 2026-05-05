@@ -65,10 +65,20 @@ export interface GitDiffStats {
   removed: number;
 }
 
+export interface RefactoringHint {
+  patternName: string;
+  violationType: string;
+  rationale: string;
+  steps: string[];
+  estimatedRatingGain: number;
+  priority: 'high' | 'medium' | 'low';
+}
+
 export interface FileDetailResponse {
   analysis: FileAnalysis;
   ratingBreakdown: RatingBreakdownItem[];
   gitDiff: GitDiffStats | null;
+  refactoringHints?: RefactoringHint[];
 }
 
 export interface WSMessage {

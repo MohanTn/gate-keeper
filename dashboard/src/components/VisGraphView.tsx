@@ -77,13 +77,12 @@ function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) 
         refs.pinnedRef.current.clear();
         for (const p of data) refs.pinnedRef.current.set(p.nodeId, { x: p.x, y: p.y });
       })
-      .catch(() => { });
+      .catch(() => { /* network errors are acceptable */ });
   }, [selectedRepo, refs.pinnedRef]);
-
 }
 
-// ── Sync node updates ──────────────────────────────────────
-function useSyncNodes(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T'], fitTrigger?: number) {
+// ── Sync node and edge updates ────────────────────────────
+function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T'], fitTrigger?: number) {
   const LARGE_GRAPH_THRESHOLD = 200;
 
   useEffect(() => {
@@ -106,7 +105,7 @@ function useSyncNodes(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typ
         if (!newIds.has(id)) { refs.nodesDS.current.remove(id); refs.pinnedRef.current.delete(id); }
       }
       for (const vn of visNodes) {
-        const existing = refs.nodesDS.current.get(vn.id) as any;
+        const existing = refs.nodesDS.current.get(vn.id) as unknown as VisNodeData | undefined;
         if (existing && refs.pinnedRef.current.has(vn.id)) {
           refs.nodesDS.current.update({ ...vn, x: existing.x, y: existing.y });
         } else {
@@ -123,15 +122,11 @@ function useSyncNodes(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typ
       });
     }, 100);
   }, [graphData.nodes, graphData.edges, T, refs]);
-}
 
-// ── Sync edge updates ──────────────────────────────────────
-function useSyncEdges(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T']) {
   useEffect(() => {
     refs.edgesDS.current.clear();
     refs.edgesDS.current.add(buildVisEdges(graphData, T));
   }, [graphData.edges, T, refs]);
-
 }
 
 // ── Update interaction on scanning state
@@ -236,27 +231,26 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       },
     });
 
-    (refs.networkRef as any).current = network;
+    (refs.networkRef as React.MutableRefObject<Network | undefined>).current = network;
 
     let lastHoverUpdatedIds: string[] = [];
     let lastHoverEdgeIds: string[] = [];
+
+    const eventHandlers = createNetworkEventHandlers(graphDataRef, onNodeClickRef, onCanvasClickRef, selectedRepoRef, refs, T);
 
     network.on('hoverNode', (hoverParams: { node: string }) => {
       const nodeId = hoverParams.node;
       const isLargeGraph = graphDataRef.current.nodes.length > 200;
       const connectedNodeIds = network.getConnectedNodes(nodeId) as string[];
       const connectedEdgeIds = network.getConnectedEdges(nodeId) as string[];
-
-      if (isLargeGraph) {
-        handleLargeGraphHover(nodeId, connectedNodeIds, connectedEdgeIds);
-      } else {
-        handleSmallGraphHover(nodeId, connectedNodeIds, connectedEdgeIds);
-      }
+      isLargeGraph
+        ? handleLargeGraphHover(nodeId, connectedNodeIds, connectedEdgeIds)
+        : handleSmallGraphHover(nodeId, connectedNodeIds, connectedEdgeIds);
     });
 
     network.on('blurNode', restoreStyles);
-    network.on('click', handleNetworkClick);
-    network.on('dragEnd', handleNodeDragEnd);
+    network.on('click', eventHandlers.handleNodeClick);
+    network.on('dragEnd', eventHandlers.handleNodeDragEnd);
 
     const fitTimer = setTimeout(() => {
       try {
@@ -435,12 +429,52 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
     return () => {
       clearTimeout(fitTimer);
       network.destroy();
-      (refs.networkRef as any).current = undefined;
+      (refs.networkRef as React.MutableRefObject<Network | undefined>).current = undefined;
     };
   }, [T, refs, graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
 }
 
-// ── Zoom helper functions ──────────────────────────────────
+// ── Zoom and network event handlers ────────────────────────
+function createNetworkEventHandlers(
+  graphDataRef: React.MutableRefObject<GraphData>,
+  onNodeClickRef: React.MutableRefObject<(n: GraphNode) => void>,
+  onCanvasClickRef: React.MutableRefObject<() => void>,
+  selectedRepoRef: React.MutableRefObject<string | null>,
+  refs: NetworkRefs,
+  T: ReturnType<typeof useTheme>['T']
+) {
+  let lastHoverUpdatedIds: string[] = [];
+  let lastHoverEdgeIds: string[] = [];
+
+  return {
+    handleNodeClick: (clickParams: { nodes: string[] }) => {
+      if (clickParams.nodes.length > 0) {
+        const nodeId = clickParams.nodes[0];
+        const gn = graphDataRef.current.nodes.find(n => n.id === nodeId);
+        if (gn) onNodeClickRef.current(gn);
+      } else {
+        onCanvasClickRef.current();
+      }
+    },
+    handleNodeDragEnd: (dragParams: { nodes: string[] }) => {
+      for (const nodeId of dragParams.nodes) {
+        const node = refs.nodesDS.current.get(nodeId);
+        if (!node) continue;
+        const pos = { x: node.x as number, y: node.y as number };
+        refs.pinnedRef.current.set(nodeId, pos);
+        refs.nodesDS.current.update({ id: nodeId, physics: false });
+        if (selectedRepoRef.current) {
+          fetch('/api/positions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repo: selectedRepoRef.current, nodeId, ...pos }),
+          }).catch(() => { /* network errors acceptable */ });
+        }
+      }
+    },
+  };
+}
+
 function createZoomHandlers(networkRef: React.RefObject<Network | undefined>) {
   return {
     handleZoomIn() {
@@ -475,8 +509,7 @@ export function VisGraphView({
   const refs = useNetworkRefs({ graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger });
 
   usePositionPersistence(refs, selectedRepo);
-  useSyncNodes(refs, graphData, T, fitTrigger);
-  useSyncEdges(refs, graphData, T);
+  useSyncGraphData(refs, graphData, T, fitTrigger);
   useNodeSelection(refs, graphData, focusNodeId, highlightNodeId, T);
   useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger }, T);
   useUpdateScanningInteraction(refs.networkRef, scanning);

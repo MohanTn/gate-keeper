@@ -57,13 +57,57 @@ else
 fi
 
 echo ""
-echo "To add gate-keeper hooks globally (fires on all projects):"
-echo "  Run: node $GATE_KEEPER_DIR/dist/hook-receiver.js --install-global"
+echo "[gate-keeper] Configuring global hooks..."
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+if [[ ! -d "$HOME/.claude" ]]; then
+  mkdir -p "$HOME/.claude"
+fi
+
+# Merge hook configuration into ~/.claude/settings.json
+if [[ ! -f "$CLAUDE_SETTINGS" ]]; then
+  # Create new settings file with hooks
+  cat > "$CLAUDE_SETTINGS" << 'EOF'
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /home/mohantn/REPO/gate_keeper/dist/hook-receiver.js"
+          }
+        ]
+      }
+    ]
+  }
+}
+EOF
+  echo "[gate-keeper] ✓ Created ~/.claude/settings.json with PostToolUse hooks"
+else
+  # Check if hooks already exist
+  if ! grep -q "gate-keeper.*hook-receiver" "$CLAUDE_SETTINGS"; then
+    echo "[gate-keeper] ⚠ ~/.claude/settings.json exists but may not have gate-keeper hooks"
+    echo "[gate-keeper] Manually add to hooks.PostToolUse:"
+    echo "[gate-keeper]   {\"matcher\": \"Write|Edit|MultiEdit\", \"hooks\": [{\"type\": \"command\", \"command\": \"node $GATE_KEEPER_DIR/dist/hook-receiver.js\"}]}"
+  else
+    echo "[gate-keeper] ✓ PostToolUse hooks already configured in ~/.claude/settings.json"
+  fi
+fi
+
 echo ""
-echo "Or add manually to ~/.claude/settings.json under 'hooks':"
-echo "  \"PostToolUse\": ["
-echo "    {"
-echo "      \"matcher\": \"Write|Edit\","
-echo "      \"hooks\": [{\"type\": \"command\", \"command\": \"node $GATE_KEEPER_DIR/dist/hook-receiver.js\"}]"
-echo "    }"
-echo "  ]"
+echo "[gate-keeper] Setup Summary:"
+echo ""
+echo "  ✓ Global Write|Edit|MultiEdit hook configured"
+echo "  ✓ Daemon running on ports 5378 (WebSocket) and 5379 (IPC)"
+echo "  ✓ Dashboard available at http://localhost:5378/viz"
+echo ""
+echo "  VSCode Integration (available in Command Palette):"
+echo "    • Run Task → Gate Keeper: Analyze Current File"
+echo "    • Run Task → Gate Keeper: Scan Repository"
+echo "    • Folder open event → Gate Keeper: Register Repo on Open"
+echo ""
+echo "  MCP Server (AI Assistant Integration):"
+echo "    npm run mcp:dev       # Run in development mode"
+echo "    npm run mcp           # Run after build"
+echo "    npm run daemon        # Run the HTTP daemon"

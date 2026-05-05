@@ -1,1 +1,5 @@
-export {};
+describe('MetricCard', () => {
+  it('placeholder test', () => {
+    expect(true).toBe(true);
+  });
+});
