@@ -22,4 +22,6 @@ module.exports = {
     }],
   },
   coverageReporters: ['text', 'text-summary', 'lcov', 'cobertura'],
+  forceExit: true,
+  testTimeout: 10000,
 };

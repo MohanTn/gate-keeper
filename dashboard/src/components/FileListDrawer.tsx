@@ -59,26 +59,13 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose }: FileListDra
   const errors = graphData.nodes.reduce((a, n) => a + n.violations.filter(v => v.severity === 'error').length, 0);
 
   return (
-    <>
-      {/* Backdrop */}
-      <div
-        className="fade-in"
-        onClick={onClose}
-        style={{
-          position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 19,
-        }}
-      />
-
-      {/* Drawer */}
-      <div
-        className="slide-in-right"
-        style={{
-          position: 'absolute', top: 0, right: 0, bottom: 0,
-          width: 440, background: T.panel, borderLeft: `1px solid ${T.border}`,
-          display: 'flex', flexDirection: 'column', zIndex: 20,
-          boxShadow: '-8px 0 32px rgba(0,0,0,0.3)',
-        }}
-      >
+    <div
+      style={{
+        width: 400, background: T.panel, borderLeft: `1px solid ${T.border}`,
+        display: 'flex', flexDirection: 'column',
+        boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
+      }}
+    >
         {/* Header */}
         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -155,8 +142,7 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose }: FileListDra
             <FileRow key={node.id} node={node} onSelect={onNodeSelect} />
           ))}
         </div>
-      </div>
-    </>
+    </div>
   );
 }
 

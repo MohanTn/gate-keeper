@@ -49,10 +49,10 @@ export function AppContent({
             {repoLoading ? <RepoLoadingOverlay /> : (
                 <VisGraphView graphData={filteredGraphData} onNodeClick={onNodeSelect} onCanvasClick={onCanvasClick} highlightNodeId={selectedNode?.id} selectedRepo={selectedRepo} focusNodeId={selectedNode?.id} scanning={scanning} />
             )}
-            {!repoLoading && selectedNode && !showFileList && !showFilterPanel && (
+            {!repoLoading && selectedNode && !showFilterPanel && (
                 <DetailPanel node={selectedNode} graphData={filteredGraphData} onClose={onCanvasClick} onNodeSelect={onNodeSelect} selectedRepo={selectedRepo} />
             )}
-            {!repoLoading && showFileList && (
+            {!repoLoading && (
                 <FileListDrawer graphData={filteredGraphData} onNodeSelect={onFileListSelect} onClose={onFileListClose} />
             )}
             {!repoLoading && showFilterPanel && selectedRepo && (
