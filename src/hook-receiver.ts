@@ -25,18 +25,23 @@ const PID_FILE = path.join(GK_DIR, 'daemon.pid');
 const SESSIONS_DIR = path.join(GK_DIR, 'sessions');
 const DAEMON_SCRIPT = path.join(__dirname, 'daemon.js');
 
-const WATCHED_EXTENSIONS = new Set(['.ts', '.tsx', '.jsx', '.js', '.cs']);
+export const WATCHED_EXTENSIONS = new Set(['.ts', '.tsx', '.jsx', '.js', '.cs']);
 
 const CONFIG_FILE = path.join(GK_DIR, 'config.json');
 
 /** Convert a simple glob pattern to a RegExp */
-function globToRegex(pattern: string): RegExp {
+export function globToRegex(pattern: string): RegExp {
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
     .replace(/\*\*/g, '__GLOBSTAR__')
-    .replace(/\*/g, '[^/]*')
-    .replace(/__GLOBSTAR__/g, '.*');
-  return new RegExp(`(?:^|/)${escaped}$`, 'i');
+    .replace(/\*/g, '[^/]*');
+  
+  // Handle **/ at the start - it should match zero or more directories
+  const processed = escaped.replace(/^__GLOBSTAR__\//, '(?:.*/)?');
+  // Handle **/ in the middle - replace with .*
+  const final = processed.replace(/__GLOBSTAR__/g, '.*');
+  
+  return new RegExp(final, 'i');
 }
 
 function loadScanExcludePatterns(): Config['scanExcludePatterns'] | undefined {
@@ -49,7 +54,7 @@ function loadScanExcludePatterns(): Config['scanExcludePatterns'] | undefined {
   return undefined;
 }
 
-function isFileExcludedByScanConfig(filePath: string, ext: string): boolean {
+export function isFileExcludedByScanConfig(filePath: string, ext: string): boolean {
   const patterns = loadScanExcludePatterns();
   if (!patterns) return false;
   const fileName = filePath.split('/').pop() ?? filePath;
