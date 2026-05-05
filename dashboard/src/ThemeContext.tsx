@@ -87,7 +87,7 @@ interface ThemeContextValue {
   toggleTheme: () => void;
 }
 
-const ThemeContext = createContext<ThemeContextValue>({
+export const ThemeContext = createContext<ThemeContextValue>({
   T: darkTokens,
   mode: 'dark',
   toggleTheme: () => { },

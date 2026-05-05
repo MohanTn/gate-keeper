@@ -17,12 +17,12 @@ import { SqliteCache } from './cache/sqlite-cache';
 import { VizServer } from './viz/viz-server';
 import { Config, DaemonRequest, RepoMetadata } from './types';
 
-const IPC_PORT = 5379;
-const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
-const PID_FILE = path.join(GK_DIR, 'daemon.pid');
-const CONFIG_FILE = path.join(GK_DIR, 'config.json');
+export const IPC_PORT = 5379;
+export const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
+export const PID_FILE = path.join(GK_DIR, 'daemon.pid');
+export const CONFIG_FILE = path.join(GK_DIR, 'config.json');
 
-const DEFAULT_CONFIG: Config = {
+export const DEFAULT_CONFIG: Config = {
   minRating: 6.5,
   scanExcludePatterns: {
     global: [],
@@ -70,7 +70,7 @@ function ensureConfigFile(): void {
   }
 }
 
-function findGitRoot(dir: string): string {
+export function findGitRoot(dir: string): string {
   const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: dir, encoding: 'utf8', timeout: 3000
   });
