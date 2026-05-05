@@ -5,13 +5,10 @@ module.exports = {
   testMatch: ['**/__tests__/**/*.ts?(x)', '**/?(*.)+(spec|test).ts?(x)'],
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   collectCoverageFrom: [
-    'src/**/*.{ts,tsx}',
-    '!src/**/*.d.ts',
+    '**/*.{ts,tsx}',
+    '!**/*.d.ts',
   ],
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
-  moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
-  },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
       tsconfig: {
@@ -23,4 +20,7 @@ module.exports = {
     }],
   },
   coverageReporters: ['text', 'text-summary', 'lcov', 'cobertura'],
+  moduleNameMapper: {
+    '^react-force-graph-2d$': '<rootDir>/src/__mocks__/react-force-graph-2d.js',
+  },
 };
