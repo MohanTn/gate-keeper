@@ -303,4 +303,7 @@ async function registerRepository(sessionPayload: SessionCreatePayload): Promise
 }
 
 
-main().catch(() => { }).finally(() => process.exit(0));
+// Only run main() when this script is executed directly (not during tests/imports)
+if (require.main === module) {
+  main().catch(() => { }).finally(() => process.exit(0));
+}

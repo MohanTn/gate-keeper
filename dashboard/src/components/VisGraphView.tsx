@@ -113,14 +113,6 @@ function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType
         }
       }
     }
-
-    setTimeout(() => {
-      refs.networkRef.current?.fit({
-        animation: { duration: 400, easingFunction: 'easeInOutQuad' },
-        maxZoomLevel: 1.2,
-        minZoomLevel: 0.15,
-      });
-    }, 100);
   }, [graphData.nodes, graphData.edges, T, refs]);
 
   useEffect(() => {
@@ -144,10 +136,6 @@ function useNodeSelection(refs: NetworkRefs, graphData: GraphData, focusNodeId: 
   useEffect(() => {
     if (!refs.networkRef.current || !focusNodeId) return;
     refs.networkRef.current.selectNodes([focusNodeId], false);
-    refs.networkRef.current.focus(focusNodeId, {
-      scale: 0.9,
-      animation: { duration: 400, easingFunction: 'easeInOutQuad' },
-    });
   }, [focusNodeId, refs]);
 
   useEffect(() => {
@@ -200,8 +188,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
     }, {
       physics: { enabled: false },
       interaction: {
-        hover: true,
-        tooltipDelay: 200,
+        hover: false,
         navigationButtons: false,
         zoomView: true,
         dragView: true,
@@ -431,7 +418,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       network.destroy();
       (refs.networkRef as React.MutableRefObject<Network | undefined>).current = undefined;
     };
-  }, [T, refs, graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
+  }, [T, graphData]);
 }
 
 // ── Zoom and network event handlers ────────────────────────

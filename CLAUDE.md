@@ -44,7 +44,38 @@ new UniversalAnalyzer().analyze('/your/file.ts').then(r => console.log(JSON.stri
 "
 ```
 
-There is no test suite yet. Use the manual invocations above to validate analysis behavior.
+## Test Suite
+
+The project uses **Jest** with **ts-jest** preset for TypeScript support.
+
+### Test Commands
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode (re-run on file changes)
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
+```
+
+### Test Structure
+
+- **Test files:** `src/**/*.test.ts` or `src/**/*.spec.ts`
+- **Configuration:** `jest.config.js` (Node environment, ts-jest transformer)
+- **Coverage:** Collected from `src/**/*.{ts,tsx}`, excludes `.d.ts` files
+- **Dashboard tests:** Separate Jest config in `dashboard/jest.config.js`
+
+### Coverage Reports
+
+Coverage reports are generated in multiple formats:
+- `text` and `text-summary` — console output
+- `lcov` — detailed coverage data
+- `cobertura` — XML format for CI integration
+
+View the coverage summary after running `npm run test:coverage`.
 
 ## Architecture
 

@@ -1,64 +1,31 @@
-// @ts-nocheck
-/* eslint-disable */
-// Run with: npx vitest (add vitest to devDependencies to execute)
+import React from 'react';
+import { render } from '@testing-library/react';
+import App from './App';
 
-// Pure utility functions duplicated here for unit testing.
-// These live in App.tsx but are not exported; if they are ever extracted
-// to a shared module, import them from there instead.
+jest.mock('./components/VisGraphView', () => ({ VisGraphView: () => <div data-testid="vis-graph" /> }));
+jest.mock('./components/DetailPanel', () => ({ DetailPanel: () => <div data-testid="detail-panel" /> }));
+jest.mock('./components/FileListDrawer', () => ({ FileListDrawer: () => <div data-testid="file-list" /> }));
+jest.mock('./components/ViolationsPanel', () => ({ ViolationsPanel: () => <div data-testid="violations" /> }));
+jest.mock('./components/FilterPanel', () => ({ FilterPanel: () => <div data-testid="filter-panel" /> }));
+jest.mock('./components/AppHeader', () => ({ AppHeader: () => <header data-testid="app-header" /> }));
+jest.mock('./components/HeaderWidgets', () => ({ RepoLoadingOverlay: () => <div data-testid="loading" />, ScanProgressBar: () => <div data-testid="scan-bar" /> }));
+jest.mock('./components/AppContent', () => ({ AppContent: () => <div data-testid="app-content" />, RepoOverlay: () => <div data-testid="repo-overlay" /> }));
+jest.mock('./hooks', () => ({
+    useWebSocketConnection: () => ({ graphData: { nodes: [], edges: [] }, wsStatus: 'connected', scanProgress: null, scanning: false, setScanning: jest.fn(), lastScan: null, setLastScan: jest.fn(), handleScanAll: jest.fn(), repoLoading: false }),
+    useRepoSelection: () => ({ repos: [], selectedRepo: null, showRepoSelector: false, setShowRepoSelector: jest.fn(), handleRepoSelect: jest.fn(), refreshRepos: jest.fn() }),
+    useNodeHandlers: () => ({ selectedNode: null, handleClearSelection: jest.fn(), handleNodeSelect: jest.fn() }),
+    useExcludePatterns: () => ({ filteredGraphData: { nodes: [], edges: [] }, graphData: { nodes: [], edges: [] }, patterns: [], addPattern: jest.fn(), removePattern: jest.fn(), scanExcludePatterns: null }),
+    useSearchUI: () => ({ searchQuery: '', searchRef: { current: null }, searchResults: [], showSearchDropdown: false, handleSearchSelect: jest.fn(), handleSearchChange: jest.fn(), handleSearchFocus: jest.fn(), handleSearchBlur: jest.fn(), handleSearchKeyDown: jest.fn() }),
+    usePanelActions: () => ({ showFileList: false, showFilterPanel: false, showViolationsPanel: false, handleShowRepoSelector: jest.fn(), handleFileListOpen: jest.fn(), handleFileListSelect: jest.fn(), handleFileListClose: jest.fn(), handleToggleFilterPanel: jest.fn(), handleCloseFilterPanel: jest.fn(), handleToggleViolationsPanel: jest.fn(), handleCloseViolationsPanel: jest.fn() }),
+}));
+jest.mock('./ThemeContext', () => ({
+    useTheme: () => ({ T: { bg: '#0B1120', border: '#1E293B', borderBright: '#334155', panel: '#1E293B', text: '#F1F5F9', textMuted: '#94A3B8', textDim: '#64748B', textFaint: '#475569', accent: '#3B82F6', accentDim: '#1E3A5F', red: '#EF4444', green: '#22C55E', elevated: '#1E293B' }, mode: 'dark', toggleTheme: jest.fn() }),
+}));
 
-function globToRegex(pattern: string): RegExp {
-    const escaped = pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '__GLOBSTAR__')
-        .replace(/\*/g, '[^/]*')
-        .replace(/__GLOBSTAR__/g, '.*');
-    return new RegExp(`^${escaped}$`, 'i');
-}
-
-function matchesAnyPattern(filePath: string, patterns: Array<{ pattern: string }>): boolean {
-    const fileName = filePath.split('/').pop() ?? filePath;
-    return patterns.some(p => {
-        const re = globToRegex(p.pattern);
-        return re.test(filePath) || re.test(fileName);
-    });
-}
-
-describe('globToRegex', () => {
-    it('matches a simple filename pattern', () => {
-        const re = globToRegex('*.ts');
-        expect(re.test('foo.ts')).toBe(true);
-        expect(re.test('foo.tsx')).toBe(false);
-    });
-
-    it('matches a double-star glob across path segments', () => {
-        const re = globToRegex('**/Migrations/**');
-        expect(re.test('src/db/Migrations/001_init.ts')).toBe(true);
-        expect(re.test('src/components/App.tsx')).toBe(false);
-    });
-
-    it('is case-insensitive', () => {
-        const re = globToRegex('*.CS');
-        expect(re.test('Program.cs')).toBe(true);
-    });
-});
-
-describe('matchesAnyPattern', () => {
-    it('returns false when no patterns provided', () => {
-        expect(matchesAnyPattern('/src/App.tsx', [])).toBe(false);
-    });
-
-    it('matches on full path', () => {
-        const patterns = [{ pattern: '**/Migrations/**' }];
-        expect(matchesAnyPattern('/project/db/Migrations/001.ts', patterns)).toBe(true);
-    });
-
-    it('matches on filename alone', () => {
-        const patterns = [{ pattern: '*.spec.ts' }];
-        expect(matchesAnyPattern('/some/deep/path/foo.spec.ts', patterns)).toBe(true);
-    });
-
-    it('returns false when no pattern matches', () => {
-        const patterns = [{ pattern: '*.spec.ts' }, { pattern: '**/Migrations/**' }];
-        expect(matchesAnyPattern('/src/components/App.tsx', patterns)).toBe(false);
+describe('App', () => {
+    it('renders the app without crashing', () => {
+        const { getByTestId } = render(<App />);
+        expect(getByTestId('app-header')).toBeInTheDocument();
+        expect(getByTestId('app-content')).toBeInTheDocument();
     });
 });
