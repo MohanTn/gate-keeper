@@ -210,18 +210,12 @@ export class VizServer {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
-      const closeServer = () => {
-        const closeResult = this.server.close?.((err?: Error) => {
-          if (err) console.error('[gate-keeper] Error closing server:', err);
+      // Close WebSocket server first, then HTTP server
+      this.wss.close(() => {
+        this.server.close(() => {
           resolve();
         });
-        if (closeResult === undefined) resolve();
-      };
-      const closeWssResult = this.wss.close?.((err?: Error) => {
-        if (err) console.error('[gate-keeper] Error closing WebSocket:', err);
-        closeServer();
       });
-      if (closeWssResult === undefined) closeServer();
     });
   }
 }

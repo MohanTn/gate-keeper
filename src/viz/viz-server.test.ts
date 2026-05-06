@@ -11,7 +11,7 @@ jest.mock('ws', () => ({
   WebSocketServer: jest.fn().mockImplementation(() => ({
     on: jest.fn(),
     clients: new Set(),
-    close: jest.fn(),
+    close: jest.fn((cb?: Function) => { if (cb) cb(); }),
   })),
   WebSocket: jest.fn(),
 }));
@@ -29,7 +29,7 @@ const mockApp: any = {
   delete: jest.fn((route: string, handler: Function) => { captured.delete[route] = handler; return mockApp; }),
 };
 
-const mockServer = { listen: jest.fn((_p: number, cb: () => void) => cb()), close: jest.fn() };
+const mockServer = { listen: jest.fn((_p: number, cb: () => void) => cb()), close: jest.fn((cb?: Function) => { if (cb) cb(); }) };
 
 jest.mock('express', () => {
   const fn = jest.fn(() => mockApp);
