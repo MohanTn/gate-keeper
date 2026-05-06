@@ -26,6 +26,8 @@ const T: ThemeTokens = {
   backdrop: 'rgba(0,0,0,0.5)',
   borderBright: '#e0e0e0',
   panel: '#ffffff',
+  panelHover: '#f9f9f9',
+  elevated: '#f5f5f5',
   border: '#cccccc',
   text: '#111111',
   textFaint: '#999999',
@@ -33,9 +35,18 @@ const T: ThemeTokens = {
   textMuted: '#444444',
   red: '#ff0000',
   yellow: '#ffcc00',
+  orange: '#ff9800',
+  green: '#4caf50',
   accent: '#1976d2',
   accentDim: '#bbdefb',
   bg: '#f5f5f5',
+  cardBg: '#ffffff',
+  cardBgHover: '#f9f9f9',
+  edgeDefault: 'rgba(25,118,210,0.25)',
+  edgeHighlight: 'rgba(25,118,210,0.8)',
+  edgeDim: 'rgba(25,118,210,0.08)',
+  edgeCircular: 'rgba(255,152,0,0.45)',
+  shadow: 'rgba(0,0,0,0.15)',
 };
 
 beforeEach(() => {

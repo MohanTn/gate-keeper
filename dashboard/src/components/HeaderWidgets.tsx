@@ -1,4 +1,4 @@
-import { useTheme } from '../ThemeContext';
+import { useTheme, ThemeTokens } from '../ThemeContext';
 
 export function RepoLoadingOverlay() {
     const { T } = useTheme();
@@ -39,7 +39,7 @@ export function HeaderStat({ label, value, color, bold, onClick }: {
     );
 }
 
-function getHeaderButtonStyle(T: Record<string, string>, primary?: boolean, danger?: boolean, disabled?: boolean) {
+function getHeaderButtonStyle(T: ThemeTokens, primary?: boolean, danger?: boolean, disabled?: boolean) {
     let bg = T.panel, borderColor = T.border, textColor = T.textMuted;
     if (primary && !disabled) { bg = T.accentDim; borderColor = T.accent; textColor = '#EFF6FF'; }
     if (danger && !disabled) { bg = '#7F1D1D'; borderColor = '#991B1B'; textColor = '#FEE2E2'; }
@@ -56,7 +56,7 @@ export function HeaderButton({ label, onClick, disabled, primary, danger, title 
     );
 }
 
-function buildProgressBarStyle(T: Record<string, string>, pct: number, indeterminate: boolean) {
+function buildProgressBarStyle(T: ThemeTokens, pct: number, indeterminate: boolean) {
     return { height: '100%', borderRadius: 2, background: T.accent, transition: 'width 0.3s ease', width: indeterminate ? '40%' : `${pct}%`, animation: indeterminate ? 'progressPulse 1.5s ease-in-out infinite' : 'none' };
 }
 
@@ -80,7 +80,7 @@ export function ScanProgressIndicator({ analyzed, total }: { analyzed: number; t
     );
 }
 
-export function ScanProgressBar({ scanning, scanPct, T }: { scanning: boolean; scanPct: number | null; T: Record<string, string> }) {
+export function ScanProgressBar({ scanning, scanPct, T }: { scanning: boolean; scanPct: number | null; T: ThemeTokens }) {
     if (!scanning) return null;
     return (
         <div style={{ height: 3, background: T.border, flexShrink: 0, overflow: 'hidden' }}>

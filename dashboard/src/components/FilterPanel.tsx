@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import { useTheme } from '../ThemeContext';
+import { useTheme, ThemeTokens } from '../ThemeContext';
 import { ExcludePattern } from '../types';
 
 const FILTER_PRESETS: Array<{ label: string; pattern: string }> = [
@@ -52,7 +52,7 @@ function PatternItem({ pattern, onRemove }: { pattern: ExcludePattern; onRemove:
     );
 }
 
-function ScanExcludeSection({ scanExcludePatterns, T }: { scanExcludePatterns: ScanExcludePatterns; T: Record<string, string> }) {
+function ScanExcludeSection({ scanExcludePatterns, T }: { scanExcludePatterns: ScanExcludePatterns; T: ThemeTokens }) {
     const langLabels: Record<string, string> = { global: 'All Languages', csharp: 'C# / .NET', typescript: 'TypeScript / JavaScript' };
     return (
         <div style={{ padding: '12px 20px', borderTop: `1px solid ${T.border}` }}>
@@ -103,7 +103,7 @@ export function FilterPanel({ patterns, onAdd, onRemove, onClose, excludedCount,
                     <input ref={inputRef} type="text" name="pattern" placeholder="e.g. **/Migrations/**" style={{ flex: 1, padding: '7px 10px', background: T.panel, border: `1px solid ${T.border}`, borderRadius: 6, color: T.text, fontSize: 12, outline: 'none' }} />
                     <button type="submit" style={{ padding: '7px 14px', background: T.accentDim, border: `1px solid ${T.accent}`, borderRadius: 6, color: '#EFF6FF', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Add</button>
                 </div>
-                <div style={{ fontSize: 10, color: T.textDim, marginTop: 4 }}>Glob: <code style={{ color: T.textFaut }}>*</code> matches filename, <code style={{ color: T.textFaint }}>**</code> matches paths</div>
+                <div style={{ fontSize: 10, color: T.textDim, marginTop: 4 }}>Glob: <code style={{ color: T.textFaint }}>*</code> matches filename, <code style={{ color: T.textFaint }}>**</code> matches paths</div>
             </form>
             <div style={{ padding: '12px 20px', borderBottom: `1px solid ${T.border}` }}>
                 <div style={{ fontSize: 11, color: T.textDim, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>Quick Presets</div>

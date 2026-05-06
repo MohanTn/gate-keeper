@@ -1,8 +1,8 @@
 import React from 'react';
-import { GraphData, RepoInfo } from '../types';
+import { GraphData, RepoInfo, GraphNode } from '../types';
 import { Divider, ThemeToggleButton, HeaderStat, HeaderButton, ScanProgressIndicator } from './HeaderWidgets';
 import { SearchResultItem } from './RepoSelector';
-import { ratingColor } from '../ThemeContext';
+import { ratingColor, ThemeTokens } from '../ThemeContext';
 
 interface AppHeaderProps {
     repos: RepoInfo[];
@@ -19,7 +19,7 @@ interface AppHeaderProps {
     overallRating: number | null;
     searchQuery: string;
     searchRef: React.RefObject<HTMLInputElement>;
-    searchResults: typeof filteredGraphData.nodes;
+    searchResults: GraphNode[];
     showSearchDropdown: boolean;
     repoLoading: boolean;
     onShowRepoSelector: () => void;
@@ -31,9 +31,9 @@ interface AppHeaderProps {
     onSearchFocus: () => void;
     onSearchBlur: () => void;
     onSearchKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
-    onSearchSelect: (node: typeof filteredGraphData.nodes[number]) => void;
+    onSearchSelect: (node: GraphNode) => void;
     onToggleViolationsPanel: () => void;
-    T: Record<string, string>;
+    T: ThemeTokens;
 }
 
 export function AppHeader({

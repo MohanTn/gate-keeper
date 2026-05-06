@@ -192,8 +192,12 @@ async function main(): Promise<void> {
     console.error(`[gate-keeper] Min rating: ${config.minRating} (edit ${CONFIG_FILE} to change)`);
   });
 
-  process.on('SIGTERM', () => shutdown(cache));
-  process.on('SIGINT', () => shutdown(cache));
+  // Only register signal handlers once per process
+  if ((process as any)._gateKeeperSignalsRegistered !== true) {
+    process.on('SIGTERM', () => shutdown(cache));
+    process.on('SIGINT', () => shutdown(cache));
+    (process as any)._gateKeeperSignalsRegistered = true;
+  }
 
   console.error(`[gate-keeper] Daemon started (PID ${process.pid})`);
 }
@@ -212,7 +216,10 @@ function shutdown(cache: SqliteCache): void {
   process.exit(0);
 }
 
-main().catch(err => {
-  console.error('[gate-keeper] Fatal:', err);
-  process.exit(1);
-});
+// Only run main() if this is the entry point (not in tests)
+if (process.env.NODE_ENV !== 'test') {
+  main().catch(err => {
+    console.error('[gate-keeper] Fatal:', err);
+    process.exit(1);
+  });
+}

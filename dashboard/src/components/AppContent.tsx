@@ -7,6 +7,7 @@ import { FilterPanel } from './FilterPanel';
 import { RepoLoadingOverlay } from './HeaderWidgets';
 import { RepoSelectorModal } from './RepoSelector';
 import { GraphData, RepoInfo, ExcludePattern } from '../types';
+import { ThemeTokens } from '../ThemeContext';
 
 interface ScanExcludePatterns {
     global: string[];
@@ -34,7 +35,7 @@ interface AppContentProps {
     onViolationsClose: () => void;
     onAddPattern: (pattern: string, label?: string) => void;
     onRemovePattern: (id: number) => void;
-    T: Record<string, string>;
+    T: ThemeTokens;
 }
 
 export function AppContent({
