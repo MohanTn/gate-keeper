@@ -16,6 +16,7 @@ import { UniversalAnalyzer } from './analyzer/universal-analyzer';
 import { SqliteCache } from './cache/sqlite-cache';
 import { VizServer } from './viz/viz-server';
 import { Config, DaemonRequest, RepoMetadata } from './types';
+import { mergeFileLayer, getEffectiveLayer, readArchConfig, DEFAULT_LAYERS } from './arch/arch-config-manager';
 
 export const IPC_PORT = 5379;
 export const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
@@ -166,6 +167,14 @@ async function main(): Promise<void> {
         return;
       }
       analysis.repoRoot = reqRepo || repoRoot;
+
+      // Auto-detect and store layer assignment
+      const relPath = path.relative(analysis.repoRoot, filePath);
+      const archConfig = readArchConfig(analysis.repoRoot);
+      const detectedLayer = analysis.violations.length > 0 ? 'unknown' : 'application';
+      mergeFileLayer(analysis.repoRoot, relPath, detectedLayer);
+      analysis.layer = getEffectiveLayer(archConfig, relPath);
+
       cache.save(analysis);
       vizServer.pushAnalysis(analysis);
 

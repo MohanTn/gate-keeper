@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { VisGraphView } from './VisGraphView';
 import { DetailPanel } from './DetailPanel';
 import { FileListDrawer } from './FileListDrawer';
@@ -6,7 +6,7 @@ import { ViolationsPanel } from './ViolationsPanel';
 import { FilterPanel } from './FilterPanel';
 import { RepoLoadingOverlay } from './HeaderWidgets';
 import { RepoSelectorModal } from './RepoSelector';
-import { GraphData, RepoInfo, ExcludePattern } from '../types';
+import { GraphData, RepoInfo, ExcludePattern, ArchMapping } from '../types';
 import { ThemeTokens } from '../ThemeContext';
 
 interface ScanExcludePatterns {
@@ -27,6 +27,7 @@ interface AppContentProps {
     selectedRepo: string | null;
     patterns: ExcludePattern[];
     scanExcludePatterns: ScanExcludePatterns | null;
+    archConfig?: ArchMapping | null;
     onNodeSelect: (node: GraphData['nodes'][number]) => void;
     onCanvasClick: () => void;
     onFileListSelect: (node: GraphData['nodes'][number]) => void;
@@ -41,20 +42,67 @@ interface AppContentProps {
 export function AppContent({
     repoLoading, scanning, filteredGraphData, graphData, selectedNode,
     showFileList, showFilterPanel, showViolationsPanel, selectedRepo,
-    patterns, scanExcludePatterns,
+    patterns, scanExcludePatterns, archConfig,
     onNodeSelect, onCanvasClick, onFileListSelect, onFileListClose,
     onFilterClose, onViolationsClose, onAddPattern, onRemovePattern, T,
 }: AppContentProps) {
+    const [panelWidth, setPanelWidth] = useState(400);
+    const [isResizing, setIsResizing] = useState(false);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    // Handle mouse move for resizing
+    useEffect(() => {
+        if (!isResizing) return;
+
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!containerRef.current) return;
+            const container = containerRef.current;
+            const containerRect = container.getBoundingClientRect();
+            const newWidth = containerRect.right - e.clientX;
+            
+            // Constrain panel width between 250px and 800px
+            if (newWidth >= 250 && newWidth <= 800) {
+                setPanelWidth(newWidth);
+            }
+        };
+
+        const handleMouseUp = () => {
+            setIsResizing(false);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+
+        return () => {
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isResizing]);
+
     return (
-        <div style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
+        <div ref={containerRef} style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
             {repoLoading ? <RepoLoadingOverlay /> : (
-                <VisGraphView graphData={filteredGraphData} onNodeClick={onNodeSelect} onCanvasClick={onCanvasClick} highlightNodeId={selectedNode?.id} selectedRepo={selectedRepo} focusNodeId={selectedNode?.id} scanning={scanning} />
+                <VisGraphView graphData={filteredGraphData} onNodeClick={onNodeSelect} onCanvasClick={onCanvasClick} highlightNodeId={selectedNode?.id} selectedRepo={selectedRepo} focusNodeId={selectedNode?.id} scanning={scanning} archConfig={archConfig} />
             )}
             {!repoLoading && selectedNode && !showFilterPanel && (
                 <DetailPanel node={selectedNode} graphData={filteredGraphData} onClose={onCanvasClick} onNodeSelect={onNodeSelect} selectedRepo={selectedRepo} />
             )}
+            {/* Resizable divider */}
             {!repoLoading && (
-                <FileListDrawer graphData={filteredGraphData} onNodeSelect={onFileListSelect} onClose={onFileListClose} />
+                <div
+                    onMouseDown={() => setIsResizing(true)}
+                    style={{
+                        width: 4,
+                        cursor: 'col-resize',
+                        background: isResizing ? T.accent : T.border,
+                        transition: isResizing ? 'none' : `background 0.2s ease`,
+                        ':hover': { background: T.accent },
+                    }}
+                    title="Drag to resize right panel"
+                />
+            )}
+            {!repoLoading && (
+                <FileListDrawer graphData={filteredGraphData} onNodeSelect={onFileListSelect} onClose={onFileListClose} width={panelWidth} />
             )}
             {!repoLoading && showFilterPanel && selectedRepo && (
                 <FilterPanel patterns={patterns} onAdd={onAddPattern} onRemove={onRemovePattern} onClose={onFilterClose} excludedCount={graphData.nodes.length - filteredGraphData.nodes.length} totalCount={graphData.nodes.length} scanExcludePatterns={scanExcludePatterns} />

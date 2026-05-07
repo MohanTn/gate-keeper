@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Network } from 'vis-network/standalone';
 import { DataSet } from 'vis-data/standalone';
-import { GraphData, GraphNode } from '../types';
+import { GraphData, GraphNode, ArchMapping } from '../types';
 import { useTheme } from '../ThemeContext';
 import {
   healthColor,
@@ -17,6 +17,8 @@ import {
   getLayerBands,
   ARCH_VIOLATION_EDGE_STYLE,
   ARCH_CANVAS_PADDING,
+  type ArchViolation,
+  type ViolationType,
 } from './arch-layers';
 
 // ── Props ──────────────────────────────────────────────────
@@ -29,6 +31,7 @@ interface VisGraphViewProps {
   focusNodeId?: string | null;
   fitTrigger?: number;
   scanning?: boolean;
+  archConfig?: ArchMapping | null;
 }
 
 // ── Vis-Network Data Types ─────────────────────────────────
@@ -90,13 +93,28 @@ function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) 
 }
 
 // ── Sync node and edge updates ────────────────────────────
-function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T'], fitTrigger?: number, archMode?: boolean) {
+function useSyncGraphData(
+  refs: NetworkRefs,
+  graphData: GraphData,
+  T: ReturnType<typeof useTheme>['T'],
+  archMode?: boolean,
+  violationTypeFilters?: Record<ViolationType, boolean>,
+  minConfidence?: number,
+  archConfig?: ArchMapping | null,
+) {
   const LARGE_GRAPH_THRESHOLD = 200;
+  // Provide defaults if not passed
+  const filters = violationTypeFilters || {
+    'reverse-dependency': true,
+    'external-from-core': true,
+    'cross-layer-cycle': true,
+  };
+  const minConf = minConfidence ?? 0.4;
 
   useEffect(() => {
     const isLarge = graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
     const positions = archMode
-      ? computeArchLayerPositions(graphData.nodes)
+      ? computeArchLayerPositions(graphData.nodes, archConfig || undefined, graphData.edges)
       : isLarge
       ? new Map()
       : computeHierarchicalPositions(graphData.nodes, graphData.edges);
@@ -132,19 +150,30 @@ function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType
     // Apply arch violation styling if in arch mode
     if (archMode) {
       const nodeLayerMap = buildNodeLayerMap(graphData.nodes);
-      const violations = detectArchViolations(graphData.edges, nodeLayerMap);
+      const allViolations = detectArchViolations(graphData.edges, nodeLayerMap);
+
+      // Filter violations by type and confidence threshold
+      const filteredViolations = new Map(
+        Array.from(allViolations.entries()).filter(([, violation]) =>
+          filters[violation.type] && violation.confidence >= minConf
+        )
+      );
 
       for (const edge of visEdges) {
-        if (violations.has(edge.id)) {
-          edge.color = { color: ARCH_VIOLATION_EDGE_STYLE.color, highlight: ARCH_VIOLATION_EDGE_STYLE.highlightColor };
-          edge.width = ARCH_VIOLATION_EDGE_STYLE.width;
-          (edge as any).dashes = ARCH_VIOLATION_EDGE_STYLE.dashes;
+        if (filteredViolations.has(edge.id)) {
+          const violation = filteredViolations.get(edge.id)!;
+          // Color by severity: error=red, warning=orange, info=yellow
+          const severityColor = violation.severity === 'error' ? '#ef4444' : violation.severity === 'warning' ? '#f97316' : '#eab308';
+          edge.color = { color: severityColor, highlight: '#dc2626' };
+          edge.width = 2.5;
+          (edge as any).dashes = [4, 4];
+          (edge as any)._violation = violation;
         }
       }
     }
 
     refs.edgesDS.current.add(visEdges);
-  }, [graphData.edges, T, archMode, graphData.nodes]);
+  }, [graphData.edges, T, archMode, graphData.nodes, violationTypeFilters, minConfidence]);
 }
 
 // ── Update interaction on scanning state
@@ -192,12 +221,13 @@ function useNodeSelection(refs: NetworkRefs, graphData: GraphData, focusNodeId: 
 }
 
 // ── Initialize network instance ────────────────────────────
-function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T'], archMode?: boolean) {
+function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T'], archMode?: boolean, archConfig?: ArchMapping | null) {
   const graphDataRef = useRef(graphData);
   const onNodeClickRef = useRef(params.onNodeClick);
   const onCanvasClickRef = useRef(params.onCanvasClick);
   const selectedRepoRef = useRef(params.selectedRepo);
   const archModeRef = useRef(archMode);
+  const archConfigRef = useRef(archConfig);
 
   useEffect(() => {
     graphDataRef.current = graphData;
@@ -205,7 +235,8 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
     onCanvasClickRef.current = params.onCanvasClick;
     selectedRepoRef.current = params.selectedRepo;
     archModeRef.current = archMode;
-  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo, archMode]);
+    archConfigRef.current = archConfig;
+  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo, archMode, archConfig]);
 
   useEffect(() => {
     if (!refs.containerRef.current || refs.networkRef.current) return;
@@ -233,16 +264,23 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
         },
         borderWidth: 2,
         borderWidthSelected: 3,
-        margin: { top: 12, right: 16, bottom: 12, left: 16 },
+        margin: { top: 14, right: 18, bottom: 14, left: 18 },
         shapeProperties: { borderRadius: 8 },
         widthConstraint: { minimum: 100, maximum: 180 },
         chosen: true,
       },
       edges: {
-        smooth: { enabled: true, type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
+        smooth: {
+          enabled: true,
+          type: 'curvedCW',
+          forceDirection: 'vertical',
+          roundness: 0.5,
+        },
         arrows: { to: { enabled: true, scaleFactor: 0.4, type: 'arrow' } },
         hoverWidth: 1.5,
         selectionWidth: 2,
+        color: { inherit: false },
+        font: { color: 'transparent' },
       },
     });
 
@@ -255,8 +293,8 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
     network.on('beforeDrawing', (ctx: CanvasRenderingContext2D) => {
       if (!archModeRef.current) return;
 
-      const nodeLayerMap = buildNodeLayerMap(graphDataRef.current.nodes);
-      const bands = getLayerBands(graphDataRef.current.nodes, refs.treePositionsRef.current, nodeLayerMap);
+      const nodeLayerMap = buildNodeLayerMap(graphDataRef.current.nodes, archConfigRef.current || undefined);
+      const bands = getLayerBands(graphDataRef.current.nodes, refs.treePositionsRef.current, nodeLayerMap, archConfigRef.current || undefined);
 
       for (const band of bands) {
         // Draw swimlane background
@@ -544,21 +582,39 @@ export function VisGraphView({
   focusNodeId,
   fitTrigger,
   scanning,
+  archConfig,
 }: VisGraphViewProps) {
   const { T } = useTheme();
   const [archMode, setArchMode] = useState(false);
+  const [violationTypeFilters, setViolationTypeFilters] = useState<Record<ViolationType, boolean>>({
+    'reverse-dependency': true,
+    'external-from-core': true,
+    'cross-layer-cycle': true,
+  });
+  const [minConfidence, setMinConfidence] = useState(0.4); // Show all violations >= 40% confidence by default
   const refs = useNetworkRefs({ graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger });
 
   usePositionPersistence(refs, selectedRepo);
-  useSyncGraphData(refs, graphData, T, fitTrigger, archMode);
+  useSyncGraphData(refs, graphData, T, archMode, violationTypeFilters, minConfidence, archConfig);
   useNodeSelection(refs, graphData, focusNodeId, highlightNodeId, T);
-  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger }, T, archMode);
+  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger, scanning, archConfig }, T, archMode, archConfig);
   useUpdateScanningInteraction(refs.networkRef, scanning);
 
   const { handleZoomIn, handleZoomOut, handleFitView } = createZoomHandlers(refs.networkRef);
 
-  const nodeLayerMap = archMode ? buildNodeLayerMap(graphData.nodes) : null;
-  const violations = archMode ? detectArchViolations(graphData.edges, nodeLayerMap!) : null;
+  const nodeLayerMap = archMode ? buildNodeLayerMap(graphData.nodes, archConfig || undefined) : null;
+  const allViolations = archMode ? detectArchViolations(graphData.edges, nodeLayerMap!) : new Map();
+  const filteredViolations = new Map(
+    Array.from(allViolations.entries()).filter(([, violation]) =>
+      violationTypeFilters[violation.type] && violation.confidence >= minConfidence
+    )
+  );
+  const violationCount = filteredViolations.size;
+  const violationsBySeverity = {
+    error: Array.from(filteredViolations.values()).filter(v => v.severity === 'error').length,
+    warning: Array.from(filteredViolations.values()).filter(v => v.severity === 'warning').length,
+    info: Array.from(filteredViolations.values()).filter(v => v.severity === 'info').length,
+  };
 
   return (
     <div style={{ flex: 1, position: 'relative', background: T.bg, overflow: 'hidden' }}>
@@ -604,40 +660,31 @@ export function VisGraphView({
         >
           Arch {archMode ? '✓' : ''}
         </button>
-        {violations && violations.size > 0 && (
+        {violationCount > 0 && (
           <div style={{
             padding: '6px 8px', fontSize: 10, fontWeight: 600,
             background: T.red, color: 'white', borderRadius: 6,
             display: 'flex', alignItems: 'center', gap: 4,
           }}>
-            {violations.size} violation{violations.size > 1 ? 's' : ''}
+            {violationCount} violation{violationCount > 1 ? 's' : ''}
           </div>
         )}
       </div>
 
       {/* Legend — context-aware */}
-      <div style={{
-        position: 'absolute', bottom: 16, left: 16,
-        background: T.panel, backdropFilter: 'blur(8px)',
-        border: `1px solid ${T.border}`, borderRadius: 8,
-        padding: '8px 14px', fontSize: 11, color: T.textMuted, zIndex: 10,
-      }}>
-        {archMode ? (
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(219, 39, 119, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> API</span>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(124, 58, 255, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Service</span>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(34, 197, 94, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Domain</span>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(249, 115, 22, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Infrastructure</span>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-            <span><span style={{ color: T.green, fontWeight: 700 }}>━</span> Healthy ≥8</span>
-            <span><span style={{ color: T.yellow, fontWeight: 700 }}>━</span> Warning ≥6</span>
-            <span><span style={{ color: T.orange, fontWeight: 700 }}>━</span> Degraded ≥4</span>
-            <span><span style={{ color: T.red, fontWeight: 700 }}>━</span> Critical &lt;4</span>
-          </div>
-        )}
-      </div>
+      <LegendPanel
+        archMode={archMode}
+        graphData={graphData}
+        T={T}
+        violationTypeFilters={violationTypeFilters}
+        setViolationTypeFilters={setViolationTypeFilters}
+        minConfidence={minConfidence}
+        setMinConfidence={setMinConfidence}
+        violationCount={violationCount}
+        violationsBySeverity={violationsBySeverity}
+        allViolations={allViolations}
+      />
+
 
       {/* Zoom controls */}
       <div style={{
@@ -656,6 +703,223 @@ export function VisGraphView({
       }}>
         Hover to highlight · Click to inspect · Drag to rearrange
       </div>
+    </div>
+  );
+}
+
+interface LegendPanelProps {
+  archMode: boolean;
+  graphData: GraphData;
+  T: ReturnType<typeof useTheme>['T'];
+  violationTypeFilters?: Record<ViolationType, boolean>;
+  setViolationTypeFilters?: (f: Record<ViolationType, boolean>) => void;
+  minConfidence?: number;
+  setMinConfidence?: (c: number) => void;
+  violationCount?: number;
+  violationsBySeverity?: Record<string, number>;
+  allViolations?: Map<string, ArchViolation>;
+}
+
+function LegendPanel({
+  archMode,
+  graphData,
+  T,
+  violationTypeFilters,
+  setViolationTypeFilters,
+  minConfidence,
+  setMinConfidence,
+  violationCount = 0,
+  violationsBySeverity = { error: 0, warning: 0, info: 0 },
+  allViolations = new Map(),
+}: LegendPanelProps) {
+  const [showDetails, setShowDetails] = useState(false);
+  const hasTs = graphData.nodes.some(n => ['typescript', 'tsx', 'jsx'].includes(n.type));
+  const hasCsharp = graphData.nodes.some(n => n.type === 'csharp');
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 16, left: 16,
+      background: T.panel, backdropFilter: 'blur(8px)',
+      border: `1px solid ${T.border}`, borderRadius: 8,
+      zIndex: 10,
+      maxWidth: 480,
+    }}>
+      {archMode ? (
+        <div style={{ padding: '8px 14px', fontSize: 11, color: T.textMuted }}>
+          {/* Arch layers legend */}
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: showDetails ? 8 : 0, flexWrap: 'wrap' }}>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(219, 39, 119, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> API</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(124, 58, 255, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Service</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(34, 197, 94, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Domain</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(249, 115, 22, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Infrastructure</span>
+          </div>
+
+          {/* Violation severity colors */}
+          {violationCount > 0 && (
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 10, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.border}` }}>
+              {violationsBySeverity.error > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#ef4444', borderRadius: 2 }} /> Error: {violationsBySeverity.error}</span>}
+              {violationsBySeverity.warning > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#f97316', borderRadius: 2 }} /> Warning: {violationsBySeverity.warning}</span>}
+              {violationsBySeverity.info > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#eab308', borderRadius: 2 }} /> Info: {violationsBySeverity.info}</span>}
+            </div>
+          )}
+
+          {/* Violation type toggles */}
+          {violationTypeFilters && setViolationTypeFilters && (
+            <div style={{ marginTop: 8, fontSize: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 4 }}>Show violations:</div>
+              {(['reverse-dependency', 'external-from-core', 'cross-layer-cycle'] as ViolationType[]).map(type => (
+                <label key={type} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={violationTypeFilters[type]}
+                    onChange={(e) => setViolationTypeFilters({ ...violationTypeFilters, [type]: e.target.checked })}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <span>{type === 'reverse-dependency' ? 'Reverse Dependency' : type === 'external-from-core' ? 'External from Core' : 'Cross-Layer Cycles'}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {/* Confidence slider */}
+          {minConfidence !== undefined && setMinConfidence && (
+            <div style={{ marginTop: 8, fontSize: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ fontWeight: 600, color: T.textMuted }}>Confidence threshold: {Math.round(minConfidence * 100)}%</div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="10"
+                value={Math.round(minConfidence * 100)}
+                onChange={(e) => setMinConfidence(parseInt(e.target.value) / 100)}
+                style={{ cursor: 'pointer', width: '100%' }}
+              />
+              <div style={{ fontSize: 9, color: T.textFaint }}>Only show violations with higher confidence</div>
+            </div>
+          )}
+
+          {showDetails && (
+            <div style={{ fontSize: 10, color: T.textFaint, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
+              <div style={{ marginBottom: 8, fontWeight: 600, color: T.textMuted }}>Architectural Violations — Scoring & Examples:</div>
+
+              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Reverse Dependency (High confidence)</div>
+                <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>service.ts → api.ts</span> (service → api violation)</div>
+                <div style={{ marginBottom: 2, color: T.textFaint }}>90% confidence: Strong violation of dependency flow</div>
+                <div style={{ marginBottom: 4, color: T.textFaint }}>Why bad: Inner layers shouldn't import from outer layers</div>
+                <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Use dependency injection or interfaces</div>
+              </div>
+
+              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>⚠ Type Import (Low confidence)</div>
+                <div style={{ marginBottom: 2 }}><span style={{ color: T.orange, fontWeight: 600 }}>service.ts → types.ts</span> (importing types is OK)</div>
+                <div style={{ marginBottom: 2, color: T.textFaint }}>30% confidence: Likely false positive for type-only imports</div>
+                <div style={{ marginBottom: 4, color: T.textFaint }}>Suppressed: Type imports don't create true runtime coupling</div>
+                <div style={{ color: T.green, fontWeight: 500 }}>✓ Use: {'import type { T } from \'...\''}</div>
+              </div>
+
+              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>⚠ Safe External Lib (Ignored)</div>
+                <div style={{ marginBottom: 2 }}><span style={{ color: T.orange, fontWeight: 600 }}>domain.ts → date-fns</span> (safe utility library)</div>
+                <div style={{ marginBottom: 2, color: T.textFaint }}>Not flagged: Utility libs (lodash, zod, date-fns) are allowed</div>
+                <div style={{ marginBottom: 4, color: T.textFaint }}>Common safe libs: date-fns, zod, uuid, lodash, chalk</div>
+              </div>
+
+              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ External Dependency from Core</div>
+                <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>domain.ts → custom-vendor-lib</span> (framework coupling)</div>
+                <div style={{ marginBottom: 2, color: T.textFaint }}>80% confidence: Core shouldn't depend on non-standard libs</div>
+                <div style={{ marginBottom: 4, color: T.textFaint }}>Why bad: Couples business logic to specific vendors</div>
+                <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: infrastructure.ts → vendor-lib → domain.ts (adapter pattern)</div>
+              </div>
+
+              <div>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Cross-Layer Cycles (Highest severity)</div>
+                <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>service.ts ↔ repository.ts</span> (circular across layers)</div>
+                <div style={{ marginBottom: 2, color: T.textFaint }}>95% confidence: Real architectural problem, high severity</div>
+                <div style={{ color: T.textFaint }}>Why bad: Makes testing impossible, hides true dependencies</div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ padding: '8px 14px', fontSize: 11, color: T.textMuted }}>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: showDetails ? 8 : 0 }}>
+            <span><span style={{ color: T.green, fontWeight: 700 }}>━</span> Healthy ≥8</span>
+            <span><span style={{ color: T.yellow, fontWeight: 700 }}>━</span> Warning ≥6</span>
+            <span><span style={{ color: T.orange, fontWeight: 700 }}>━</span> Degraded ≥4</span>
+            <span><span style={{ color: T.red, fontWeight: 700 }}>━</span> Critical &lt;4</span>
+          </div>
+          {showDetails && (
+            <div style={{ fontSize: 10, color: T.textFaint, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
+              {hasTs && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 6 }}>React/TypeScript — Code Patterns:</div>
+                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Too Many Hooks</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>5+ hook calls in one component (useState, useEffect, etc.)</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: ≤ 3–5 hooks, extract rest to custom hooks</div>
+                  </div>
+                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Missing Key Props</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>{`items.map(item => <div>{item.name}</div>)`} — no key</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>{`✓ Correct: <div key={item.id}>`}</div>
+                  </div>
+                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Inline Event Handlers</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>{`<button onClick={() => setState(x + 1)}>`} creates new function on every render</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: useCallback or named function</div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Any Type</div>
+                    <div style={{ color: T.textFaint }}>Unsafe: bypasses TypeScript safety</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: explicit types or `unknown`</div>
+                  </div>
+                </div>
+              )}
+              {hasCsharp && (
+                <div>
+                  <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 6 }}>C#/.NET — Code Patterns:</div>
+                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ God Class</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>Classes with 20+ methods doing many unrelated tasks</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: ≤ 20 methods, each with single responsibility</div>
+                  </div>
+                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Long Methods</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>{'Methods >50 lines hard to test and reason about'}</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Extract logic into smaller, focused methods</div>
+                  </div>
+                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Tight Coupling</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>Constructor with 5+ parameters (OrderService, PaymentService, LogService...)</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Use config object or DI container</div>
+                  </div>
+                  <div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Empty Catch Blocks</div>
+                    <div style={{ marginBottom: 2, color: T.textFaint }}>Silently swallows exceptions, hides bugs</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Log, handle, or re-throw with context</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      <button
+        onClick={() => setShowDetails(!showDetails)}
+        style={{
+          width: '100%', padding: '6px 0', background: 'transparent',
+          border: `1px solid ${T.border}`, borderTop: showDetails ? 'none' : undefined,
+          borderRadius: showDetails ? '0 0 8px 8px' : 0,
+          color: T.textDim, fontSize: 10, cursor: 'pointer',
+          transition: 'all 0.2s',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = T.elevated; e.currentTarget.style.color = T.textMuted; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = T.textDim; }}
+      >
+        {showDetails ? '▲ Hide patterns' : '▼ Show ideal patterns'}
+      </button>
     </div>
   );
 }

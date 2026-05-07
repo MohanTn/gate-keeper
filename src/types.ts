@@ -1,5 +1,19 @@
 export type Language = 'csharp' | 'typescript' | 'tsx' | 'jsx';
 
+export interface ArchLayerDef {
+  id: string;
+  label: string;
+  color: string;
+  order: number;
+}
+
+export interface ArchMapping {
+  version: string;
+  layers: ArchLayerDef[];
+  files: Record<string, string>;      // path → layerId (auto-detected)
+  overrides: Record<string, string>;  // path → layerId (user-set, never overwritten)
+}
+
 export interface Dependency {
   source: string;
   target: string;
@@ -35,6 +49,7 @@ export interface FileAnalysis {
   analyzedAt: number;
   repoRoot?: string;
   definedTypes?: string[];
+  layer?: string;
 }
 
 export interface GraphNode {

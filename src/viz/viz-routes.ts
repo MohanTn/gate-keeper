@@ -7,6 +7,7 @@ import { PatternDetector } from '../analyzer/pattern-detector';
 import { RefactoringAdvisor } from '../analyzer/refactoring-advisor';
 import { Config, GraphData } from '../types';
 import { getGitDiffStats } from './viz-helpers';
+import { readArchConfig, writeArchConfig, setLayerOverride } from '../arch/arch-config-manager';
 
 const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
 const CONFIG_FILE = path.join(GK_DIR, 'config.json');
@@ -223,5 +224,39 @@ export function registerRoutes(app: express.Application, deps: RouteDeps): void 
     const analyses = deps.cache.getAll(repo);
     const reports = deps.patternDetector.detect(analyses);
     res.json(reports);
+  });
+
+  // Get architecture config for a repo
+  app.get('/api/arch', (req, res) => {
+    const repo = req.query['repo'] as string | undefined;
+    if (!repo) {
+      res.status(400).json({ error: 'repo query parameter is required' });
+      return;
+    }
+    try {
+      const archConfig = readArchConfig(repo);
+      res.json(archConfig);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
+  });
+
+  // Set layer override for a file
+  app.put('/api/arch', (req, res) => {
+    const { repo, filePath, layer } = req.body as { repo: string; filePath: string; layer: string };
+    if (!repo || !filePath || !layer) {
+      res.status(400).json({ error: 'repo, filePath, and layer are required' });
+      return;
+    }
+    try {
+      const relPath = path.relative(repo, filePath);
+      setLayerOverride(repo, relPath, layer);
+      const archConfig = readArchConfig(repo);
+      res.json(archConfig);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: msg });
+    }
   });
 }
