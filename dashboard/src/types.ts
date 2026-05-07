@@ -1,5 +1,19 @@
 export type Language = 'csharp' | 'typescript' | 'tsx' | 'jsx';
 
+export interface ArchLayerDef {
+  id: string;
+  label: string;
+  color: string;
+  order: number;
+}
+
+export interface ArchMapping {
+  version: string;
+  layers: ArchLayerDef[];
+  files: Record<string, string>;      // path → layerId (auto-detected)
+  overrides: Record<string, string>;  // path → layerId (user-set, never overwritten)
+}
+
 export interface Violation {
   type: string;
   severity: 'error' | 'warning' | 'info';
@@ -24,6 +38,7 @@ export interface GraphNode {
   size: number;
   violations: Violation[];
   metrics: Metrics;
+  layer?: string;
   // force-graph runtime fields
   x?: number;
   y?: number;

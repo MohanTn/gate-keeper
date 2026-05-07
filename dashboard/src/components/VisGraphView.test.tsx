@@ -108,13 +108,15 @@ jest.mock('./graph-utils', () => ({
 global.fetch = jest.fn();
 
 describe('VisGraphView', () => {
+  const mockMetrics = { linesOfCode: 150, cyclomaticComplexity: 5, numberOfMethods: 10, numberOfClasses: 2, importCount: 5 };
+
   const mockGraphData: GraphData = {
     nodes: [
-      { id: 'file-1', name: 'file1.ts', rating: 8.5, language: 'typescript', violations: [] },
-      { id: 'file-2', name: 'file2.ts', rating: 6.0, language: 'typescript', violations: [] },
+      { id: 'file-1', label: 'file1.ts', type: 'typescript', rating: 8.5, size: 150, violations: [], metrics: mockMetrics },
+      { id: 'file-2', label: 'file2.ts', type: 'typescript', rating: 6.0, size: 200, violations: [], metrics: mockMetrics },
     ],
     edges: [
-      { source: 'file-1', target: 'file-2' },
+      { source: 'file-1', target: 'file-2', type: 'dependency', strength: 1 },
     ],
   };
 
@@ -140,6 +142,7 @@ describe('VisGraphView', () => {
           graphData={mockEmptyGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -156,6 +159,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -174,6 +178,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -191,6 +196,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -206,6 +212,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -224,6 +231,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -242,6 +250,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -259,6 +268,7 @@ describe('VisGraphView', () => {
           graphData={mockEmptyGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -275,6 +285,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -297,13 +308,14 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
       const newGraphData: GraphData = {
         nodes: [
           ...mockGraphData.nodes,
-          { id: 'file-3', name: 'file3.ts', rating: 7.0, language: 'typescript', violations: [] },
+          { id: 'file-3', label: 'file3.ts', type: 'typescript', rating: 7.0, size: 180, violations: [], metrics: mockMetrics },
         ],
         edges: mockGraphData.edges,
       };
@@ -313,6 +325,7 @@ describe('VisGraphView', () => {
           graphData={newGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -330,6 +343,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -337,7 +351,7 @@ describe('VisGraphView', () => {
         nodes: mockGraphData.nodes,
         edges: [
           ...mockGraphData.edges,
-          { source: 'file-2', target: 'file-1' },
+          { source: 'file-2', target: 'file-1', type: 'dependency', strength: 1 },
         ],
       };
 
@@ -346,6 +360,7 @@ describe('VisGraphView', () => {
           graphData={newGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -365,6 +380,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           highlightNodeId="file-1"
         />
       );
@@ -383,6 +399,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           highlightNodeId="file-1"
         />
       );
@@ -392,6 +409,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           highlightNodeId="file-2"
         />
       );
@@ -412,6 +430,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           focusNodeId="file-1"
         />
       );
@@ -430,6 +449,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           focusNodeId={null}
         />
       );
@@ -448,6 +468,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           focusNodeId="file-1"
         />
       );
@@ -457,6 +478,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           focusNodeId="file-2"
         />
       );
@@ -550,6 +572,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -567,6 +590,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -588,6 +612,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -611,6 +636,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           scanning={true}
         />
       );
@@ -629,6 +655,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           scanning={true}
         />
       );
@@ -638,6 +665,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           scanning={false}
         />
       );
@@ -654,6 +682,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           scanning={false}
         />
       );
@@ -663,6 +692,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           scanning={true}
         />
       );
@@ -681,6 +711,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -700,6 +731,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -725,14 +757,18 @@ describe('VisGraphView', () => {
       const largeGraphData: GraphData = {
         nodes: Array.from({ length: 250 }, (_, i) => ({
           id: `file-${i}`,
-          name: `file${i}.ts`,
+          label: `file${i}.ts`,
+          type: 'typescript',
           rating: Math.random() * 10,
-          language: 'typescript',
+          size: 100,
           violations: [],
+          metrics: mockMetrics,
         })),
         edges: Array.from({ length: 250 }, (_, i) => ({
           source: `file-${i}`,
           target: `file-${(i + 1) % 250}`,
+          type: 'dependency',
+          strength: 1,
         })),
       };
 
@@ -741,6 +777,7 @@ describe('VisGraphView', () => {
           graphData={largeGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -760,6 +797,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -780,6 +818,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick1}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -789,6 +828,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick2}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -805,6 +845,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick1}
+          selectedRepo={null}
         />
       );
 
@@ -814,6 +855,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick2}
+          selectedRepo={null}
         />
       );
 
@@ -830,6 +872,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           fitTrigger={1}
         />
       );
@@ -839,6 +882,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
           fitTrigger={2}
         />
       );
@@ -858,6 +902,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -881,6 +926,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -902,6 +948,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -927,6 +974,7 @@ describe('VisGraphView', () => {
           graphData={singleNodeData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -940,10 +988,12 @@ describe('VisGraphView', () => {
       const manyNodesData: GraphData = {
         nodes: Array.from({ length: 150 }, (_, i) => ({
           id: `node-${i}`,
-          name: `node${i}`,
+          label: `node${i}`,
+          type: 'typescript',
           rating: 5 + Math.random() * 5,
-          language: 'typescript',
+          size: 100,
           violations: [],
+          metrics: mockMetrics,
         })),
         edges: [],
       };
@@ -953,6 +1003,7 @@ describe('VisGraphView', () => {
           graphData={manyNodesData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 
@@ -968,8 +1019,8 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
-          highlightNodeId="file-1"
           selectedRepo="test-repo"
+          highlightNodeId="file-1"
           focusNodeId="file-2"
           fitTrigger={1}
           scanning={false}
@@ -989,6 +1040,7 @@ describe('VisGraphView', () => {
           graphData={mockGraphData}
           onNodeClick={onNodeClick}
           onCanvasClick={onCanvasClick}
+          selectedRepo={null}
         />
       );
 

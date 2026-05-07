@@ -14,12 +14,13 @@ interface FileListDrawerProps {
   graphData: GraphData;
   onNodeSelect: (node: GraphNode) => void;
   onClose: () => void;
+  width?: number;
 }
 
 type SortField = 'rating' | 'label' | 'linesOfCode' | 'violations';
 
 // ── Main Component ─────────────────────────────────────────
-export function FileListDrawer({ graphData, onNodeSelect, onClose }: FileListDrawerProps) {
+export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }: FileListDrawerProps) {
   const { T } = useTheme();
   const [state, setState] = useState<{ search: string; sortField: SortField; sortDir: 'asc' | 'desc' }>(
     { search: '', sortField: 'rating', sortDir: 'asc' }
@@ -61,7 +62,7 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose }: FileListDra
   return (
     <div
       style={{
-        width: 400, background: T.panel, borderLeft: `1px solid ${T.border}`,
+        width, background: T.panel, borderLeft: `1px solid ${T.border}`,
         display: 'flex', flexDirection: 'column',
         boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
       }}
