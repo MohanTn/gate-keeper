@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Network } from 'vis-network/standalone';
 import { DataSet } from 'vis-data/standalone';
 import { GraphData, GraphNode } from '../types';
@@ -10,6 +10,14 @@ import {
   buildVisEdges,
   computeHierarchicalPositions,
 } from './graph-utils';
+import {
+  computeArchLayerPositions,
+  detectArchViolations,
+  buildNodeLayerMap,
+  getLayerBands,
+  ARCH_VIOLATION_EDGE_STYLE,
+  ARCH_CANVAS_PADDING,
+} from './arch-layers';
 
 // ── Props ──────────────────────────────────────────────────
 interface VisGraphViewProps {
@@ -82,12 +90,14 @@ function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) 
 }
 
 // ── Sync node and edge updates ────────────────────────────
-function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T'], fitTrigger?: number) {
+function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType<typeof useTheme>['T'], fitTrigger?: number, archMode?: boolean) {
   const LARGE_GRAPH_THRESHOLD = 200;
 
   useEffect(() => {
     const isLarge = graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
-    const positions = isLarge
+    const positions = archMode
+      ? computeArchLayerPositions(graphData.nodes)
+      : isLarge
       ? new Map()
       : computeHierarchicalPositions(graphData.nodes, graphData.edges);
     refs.treePositionsRef.current.clear();
@@ -113,12 +123,28 @@ function useSyncGraphData(refs: NetworkRefs, graphData: GraphData, T: ReturnType
         }
       }
     }
-  }, [graphData.nodes, graphData.edges, T, refs]);
+  }, [graphData.nodes, graphData.edges, T, refs, archMode]);
 
   useEffect(() => {
     refs.edgesDS.current.clear();
-    refs.edgesDS.current.add(buildVisEdges(graphData, T));
-  }, [graphData.edges, T, refs]);
+    const visEdges = buildVisEdges(graphData, T);
+
+    // Apply arch violation styling if in arch mode
+    if (archMode) {
+      const nodeLayerMap = buildNodeLayerMap(graphData.nodes);
+      const violations = detectArchViolations(graphData.edges, nodeLayerMap);
+
+      for (const edge of visEdges) {
+        if (violations.has(edge.id)) {
+          edge.color = { color: ARCH_VIOLATION_EDGE_STYLE.color, highlight: ARCH_VIOLATION_EDGE_STYLE.highlightColor };
+          edge.width = ARCH_VIOLATION_EDGE_STYLE.width;
+          (edge as any).dashes = ARCH_VIOLATION_EDGE_STYLE.dashes;
+        }
+      }
+    }
+
+    refs.edgesDS.current.add(visEdges);
+  }, [graphData.edges, T, archMode, graphData.nodes]);
 }
 
 // ── Update interaction on scanning state
@@ -166,18 +192,20 @@ function useNodeSelection(refs: NetworkRefs, graphData: GraphData, focusNodeId: 
 }
 
 // ── Initialize network instance ────────────────────────────
-function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T']) {
+function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T'], archMode?: boolean) {
   const graphDataRef = useRef(graphData);
   const onNodeClickRef = useRef(params.onNodeClick);
   const onCanvasClickRef = useRef(params.onCanvasClick);
   const selectedRepoRef = useRef(params.selectedRepo);
+  const archModeRef = useRef(archMode);
 
   useEffect(() => {
     graphDataRef.current = graphData;
     onNodeClickRef.current = params.onNodeClick;
     onCanvasClickRef.current = params.onCanvasClick;
     selectedRepoRef.current = params.selectedRepo;
-  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
+    archModeRef.current = archMode;
+  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo, archMode]);
 
   useEffect(() => {
     if (!refs.containerRef.current || refs.networkRef.current) return;
@@ -222,6 +250,31 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
 
     let lastHoverUpdatedIds: string[] = [];
     let lastHoverEdgeIds: string[] = [];
+
+    // Register beforeDrawing handler for arch layer swimlanes
+    network.on('beforeDrawing', (ctx: CanvasRenderingContext2D) => {
+      if (!archModeRef.current) return;
+
+      const nodeLayerMap = buildNodeLayerMap(graphDataRef.current.nodes);
+      const bands = getLayerBands(graphDataRef.current.nodes, refs.treePositionsRef.current, nodeLayerMap);
+
+      for (const band of bands) {
+        // Draw swimlane background
+        ctx.fillStyle = band.color;
+        ctx.fillRect(
+          band.x - ARCH_CANVAS_PADDING.x,
+          band.minY - ARCH_CANVAS_PADDING.y,
+          band.width + ARCH_CANVAS_PADDING.x * 2,
+          band.height + ARCH_CANVAS_PADDING.y * 2
+        );
+
+        // Draw layer label at top
+        ctx.fillStyle = T.textMuted;
+        ctx.font = 'bold 13px Inter, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(band.label, band.x + band.width / 2, band.minY - 10);
+      }
+    });
 
     const eventHandlers = createNetworkEventHandlers(graphDataRef, onNodeClickRef, onCanvasClickRef, selectedRepoRef, refs, T);
 
@@ -418,7 +471,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       network.destroy();
       (refs.networkRef as React.MutableRefObject<Network | undefined>).current = undefined;
     };
-  }, [T, graphData]);
+  }, [T, graphData, archMode]);
 }
 
 // ── Zoom and network event handlers ────────────────────────
@@ -493,15 +546,19 @@ export function VisGraphView({
   scanning,
 }: VisGraphViewProps) {
   const { T } = useTheme();
+  const [archMode, setArchMode] = useState(false);
   const refs = useNetworkRefs({ graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger });
 
   usePositionPersistence(refs, selectedRepo);
-  useSyncGraphData(refs, graphData, T, fitTrigger);
+  useSyncGraphData(refs, graphData, T, fitTrigger, archMode);
   useNodeSelection(refs, graphData, focusNodeId, highlightNodeId, T);
-  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger }, T);
+  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger }, T, archMode);
   useUpdateScanningInteraction(refs.networkRef, scanning);
 
   const { handleZoomIn, handleZoomOut, handleFitView } = createZoomHandlers(refs.networkRef);
+
+  const nodeLayerMap = archMode ? buildNodeLayerMap(graphData.nodes) : null;
+  const violations = archMode ? detectArchViolations(graphData.edges, nodeLayerMap!) : null;
 
   return (
     <div style={{ flex: 1, position: 'relative', background: T.bg, overflow: 'hidden' }}>
@@ -525,19 +582,61 @@ export function VisGraphView({
 
       <div ref={refs.containerRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* Compact legend — health colors only */}
+      {/* Arch View toggle button — top left */}
+      <div style={{
+        position: 'absolute', top: 16, left: 16,
+        display: 'flex', gap: 8, zIndex: 10,
+      }}>
+        <button
+          onClick={() => setArchMode(!archMode)}
+          style={{
+            padding: '6px 12px', fontSize: 12, fontWeight: 500,
+            background: archMode ? T.accent : T.panel, border: `1px solid ${archMode ? T.accent : T.border}`,
+            borderRadius: 6, color: archMode ? 'white' : T.textMuted, cursor: 'pointer',
+            backdropFilter: 'blur(8px)', transition: 'all 0.2s ease',
+          }}
+          onMouseEnter={(e) => {
+            if (!archMode) e.currentTarget.style.background = T.cardBgHover;
+          }}
+          onMouseLeave={(e) => {
+            if (!archMode) e.currentTarget.style.background = T.panel;
+          }}
+        >
+          Arch {archMode ? '✓' : ''}
+        </button>
+        {violations && violations.size > 0 && (
+          <div style={{
+            padding: '6px 8px', fontSize: 10, fontWeight: 600,
+            background: T.red, color: 'white', borderRadius: 6,
+            display: 'flex', alignItems: 'center', gap: 4,
+          }}>
+            {violations.size} violation{violations.size > 1 ? 's' : ''}
+          </div>
+        )}
+      </div>
+
+      {/* Legend — context-aware */}
       <div style={{
         position: 'absolute', bottom: 16, left: 16,
         background: T.panel, backdropFilter: 'blur(8px)',
         border: `1px solid ${T.border}`, borderRadius: 8,
         padding: '8px 14px', fontSize: 11, color: T.textMuted, zIndex: 10,
       }}>
-        <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
-          <span><span style={{ color: T.green, fontWeight: 700 }}>━</span> Healthy ≥8</span>
-          <span><span style={{ color: T.yellow, fontWeight: 700 }}>━</span> Warning ≥6</span>
-          <span><span style={{ color: T.orange, fontWeight: 700 }}>━</span> Degraded ≥4</span>
-          <span><span style={{ color: T.red, fontWeight: 700 }}>━</span> Critical &lt;4</span>
-        </div>
+        {archMode ? (
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(219, 39, 119, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> API</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(124, 58, 255, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Service</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(34, 197, 94, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Domain</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: 'rgba(249, 115, 22, 0.15)', border: `1px solid ${T.border}`, borderRadius: 2 }} /> Infrastructure</span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 14, alignItems: 'center' }}>
+            <span><span style={{ color: T.green, fontWeight: 700 }}>━</span> Healthy ≥8</span>
+            <span><span style={{ color: T.yellow, fontWeight: 700 }}>━</span> Warning ≥6</span>
+            <span><span style={{ color: T.orange, fontWeight: 700 }}>━</span> Degraded ≥4</span>
+            <span><span style={{ color: T.red, fontWeight: 700 }}>━</span> Critical &lt;4</span>
+          </div>
+        )}
       </div>
 
       {/* Zoom controls */}
