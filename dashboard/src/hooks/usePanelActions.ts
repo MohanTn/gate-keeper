@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { GraphData, GraphNode } from '../types';
+import { GraphData, GraphNode, RepoInfo } from '../types';
+import { useClearData } from './useClearData';
 
 interface UsePanelActionsReturn {
     showFileList: boolean;
@@ -13,6 +14,7 @@ interface UsePanelActionsReturn {
     handleCloseFilterPanel: () => void;
     handleToggleViolationsPanel: () => void;
     handleCloseViolationsPanel: () => void;
+    handleClear: () => Promise<void>;
 }
 
 export function usePanelActions(
@@ -22,18 +24,17 @@ export function usePanelActions(
     filteredGraphData: GraphData,
     setScanning: React.Dispatch<React.SetStateAction<boolean>>,
     setLastScan: React.Dispatch<React.SetStateAction<{ fileCount: number; ts: number } | null>>,
+    selectedRepo: string | null,
+    repos: RepoInfo[],
 ): UsePanelActionsReturn {
+    const handleClear = useClearData(selectedRepo, repos);
     const [showFileList, setShowFileList] = useState(false);
     const [showFilterPanel, setShowFilterPanel] = useState(false);
     const [showViolationsPanel, setShowViolationsPanel] = useState(false);
 
     useEffect(() => {
-        const handleScanComplete = () => {
-            setScanning(false);
-            setLastScan({ fileCount: filteredGraphData.nodes.length, ts: Date.now() });
-        };
-        handleScanComplete();
-    }, [filteredGraphData.nodes.length, setScanning, setLastScan]);
+        setLastScan({ fileCount: filteredGraphData.nodes.length, ts: Date.now() });
+    }, [filteredGraphData.nodes.length, setLastScan]);
 
     const handleShowRepoSelector = useCallback(() => {
         setShowRepoSelector(true);
@@ -73,6 +74,6 @@ export function usePanelActions(
         showFileList, showFilterPanel, showViolationsPanel,
         handleShowRepoSelector, handleFileListOpen, handleFileListSelect,
         handleFileListClose, handleToggleFilterPanel, handleCloseFilterPanel,
-        handleToggleViolationsPanel, handleCloseViolationsPanel,
+        handleToggleViolationsPanel, handleCloseViolationsPanel, handleClear,
     };
 }

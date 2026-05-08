@@ -5,3 +5,5 @@ export { useExcludePatterns } from './useExcludePatterns';
 export { useSearchUI } from './useSearchUI';
 export { usePanelActions } from './usePanelActions';
 export { useClearData } from './useClearData';
+export { useArchConfig } from './useArchConfig';
+export { useGraphData } from './useGraphData';

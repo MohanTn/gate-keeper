@@ -1,6 +1,9 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState, useRef, useEffect, memo } from 'react';
 import { GraphData, GraphNode } from '../types';
 import { ThemeTokens, useTheme } from '../ThemeContext';
+
+const ITEM_HEIGHT = 48;
+const OVERSCAN = 4;
 
 function rc(r: number, T: ThemeTokens) {
   if (r >= 8) return T.green;
@@ -27,6 +30,24 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
   );
   const { search, sortField, sortDir } = state;
 
+  // Virtual scroll state
+  const [scrollTop, setScrollTop] = useState(0);
+  const [listHeight, setListHeight] = useState(400);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setListHeight(el.clientHeight));
+    ro.observe(el);
+    setListHeight(el.clientHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  }, []);
+
   const handleSort = useCallback((field: SortField) => {
     setState(prev => {
       if (prev.sortField === field) {
@@ -52,19 +73,29 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
     });
   }, [graphData.nodes, search, sortField, sortDir]);
 
-  const totalLoc = graphData.nodes.reduce((a, n) => a + (n.metrics.linesOfCode || 1), 0);
-  const overallRating = graphData.nodes.length > 0 && totalLoc > 0
-    ? Math.round((graphData.nodes.reduce((a, n) => a + n.rating * (n.metrics.linesOfCode || 1), 0) / totalLoc) * 10) / 10
-    : null;
-  const totalViolations = graphData.nodes.reduce((a, n) => a + n.violations.length, 0);
-  const errors = graphData.nodes.reduce((a, n) => a + n.violations.filter(v => v.severity === 'error').length, 0);
+  const stats = useMemo(() => {
+    const totalLoc = graphData.nodes.reduce((a, n) => a + (n.metrics.linesOfCode || 1), 0);
+    const overallRating = graphData.nodes.length > 0 && totalLoc > 0
+      ? Math.round((graphData.nodes.reduce((a, n) => a + n.rating * (n.metrics.linesOfCode || 1), 0) / totalLoc) * 10) / 10
+      : null;
+    const totalViolations = graphData.nodes.reduce((a, n) => a + n.violations.length, 0);
+    const errors = graphData.nodes.reduce((a, n) => a + n.violations.filter(v => v.severity === 'error').length, 0);
+    return { overallRating, totalViolations, errors };
+  }, [graphData.nodes]);
+
+  // Virtual window computation
+  const totalHeight = filtered.length * ITEM_HEIGHT;
+  const startIdx = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
+  const endIdx = Math.min(filtered.length, Math.ceil((scrollTop + listHeight) / ITEM_HEIGHT) + OVERSCAN);
+  const offsetY = startIdx * ITEM_HEIGHT;
 
   return (
     <div
       style={{
-        width, background: T.panel, borderLeft: `1px solid ${T.border}`,
+        flex: `0 0 ${width}px`, background: T.panel, borderLeft: `1px solid ${T.border}`,
         display: 'flex', flexDirection: 'column',
         boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
+        overflow: 'hidden',
       }}
     >
         {/* Header */}
@@ -88,11 +119,11 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8, marginBottom: 12 }}>
             <MiniCard
               label="Score"
-              value={overallRating != null ? overallRating.toFixed(1) : '—'}
-              color={overallRating != null ? rc(overallRating, T) : T.textDim}
+              value={stats.overallRating != null ? stats.overallRating.toFixed(1) : '—'}
+              color={stats.overallRating != null ? rc(stats.overallRating, T) : T.textDim}
             />
-            <MiniCard label="Issues" value={totalViolations} color={totalViolations > 0 ? T.yellow : T.green} />
-            <MiniCard label="Errors" value={errors} color={errors > 0 ? T.red : T.green} />
+            <MiniCard label="Issues" value={stats.totalViolations} color={stats.totalViolations > 0 ? T.yellow : T.green} />
+            <MiniCard label="Errors" value={stats.errors} color={stats.errors > 0 ? T.red : T.green} />
           </div>
 
           {/* Search */}
@@ -133,15 +164,21 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
           ))}
         </div>
 
-        {/* File rows */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* Virtualized file list */}
+        <div ref={listRef} style={{ flex: 1, overflowY: 'auto' }} onScroll={handleScroll}>
           {filtered.length === 0 ? (
             <div style={{ padding: 32, textAlign: 'center', color: T.textDim, fontSize: 13 }}>
               {search ? 'No files match your search' : 'No files analyzed yet'}
             </div>
-          ) : filtered.map(node => (
-            <FileRow key={node.id} node={node} onSelect={onNodeSelect} />
-          ))}
+          ) : (
+            <div style={{ height: totalHeight, position: 'relative' }}>
+              <div style={{ position: 'absolute', top: offsetY, left: 0, right: 0 }}>
+                {filtered.slice(startIdx, endIdx).map(node => (
+                  <FileRow key={node.id} node={node} onSelect={onNodeSelect} />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
     </div>
   );
@@ -177,7 +214,7 @@ function SortHeader({ field, label, active, dir, onSort }: {
   );
 }
 
-function FileRow({ node, onSelect }: { node: GraphNode; onSelect: (n: GraphNode) => void }) {
+const FileRow = memo(function FileRow({ node, onSelect }: { node: GraphNode; onSelect: (n: GraphNode) => void }) {
   const { T } = useTheme();
   const errCount = node.violations.filter(v => v.severity === 'error').length;
   return (
@@ -185,7 +222,8 @@ function FileRow({ node, onSelect }: { node: GraphNode; onSelect: (n: GraphNode)
       onClick={() => onSelect(node)}
       style={{
         display: 'grid', gridTemplateColumns: '1fr 80px 50px 50px',
-        alignItems: 'center', padding: '8px 20px',
+        alignItems: 'center', padding: '0 20px',
+        height: ITEM_HEIGHT, boxSizing: 'border-box',
         borderBottom: `1px solid ${T.border}`, cursor: 'pointer', transition: 'background 0.1s',
       }}
       onMouseEnter={e => { e.currentTarget.style.background = T.panelHover; }}
@@ -214,4 +252,4 @@ function FileRow({ node, onSelect }: { node: GraphNode; onSelect: (n: GraphNode)
       </div>
     </div>
   );
-}
+});

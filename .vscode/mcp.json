@@ -1,0 +1,11 @@
+{
+    "servers": {
+        "gate-keeper": {
+            "command": "node",
+            "args": [
+                "dist/mcp/server.js"
+            ],
+            "cwd": "/home/mohantn/REPO/gate_keeper"
+        }
+    }
+}
