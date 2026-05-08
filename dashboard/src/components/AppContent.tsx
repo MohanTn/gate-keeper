@@ -79,6 +79,8 @@ export function AppContent({
         };
     }, [isResizing]);
 
+    const [dividerHover, setDividerHover] = useState(false);
+
     return (
         <div ref={containerRef} style={{ display: 'flex', flex: 1, overflow: 'hidden', position: 'relative' }}>
             {repoLoading ? <RepoLoadingOverlay /> : (
@@ -91,12 +93,21 @@ export function AppContent({
             {!repoLoading && (
                 <div
                     onMouseDown={() => setIsResizing(true)}
+                    onMouseEnter={() => setDividerHover(true)}
+                    onMouseLeave={() => setDividerHover(false)}
                     style={{
-                        width: 4,
+                        width: 8,
+                        paddingLeft: 2,
+                        paddingRight: 2,
                         cursor: 'col-resize',
-                        background: isResizing ? T.accent : T.border,
+                        background: isResizing || dividerHover ? T.accent : 'transparent',
                         transition: isResizing ? 'none' : `background 0.2s ease`,
-                        ':hover': { background: T.accent },
+                        userSelect: 'none',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderLeft: `1px solid ${isResizing || dividerHover ? T.accent : T.border}`,
+                        borderRight: `1px solid ${isResizing || dividerHover ? T.accent : T.border}`,
                     }}
                     title="Drag to resize right panel"
                 />

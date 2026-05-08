@@ -21,20 +21,20 @@ export const DEFAULT_ARCH_CONFIG: ArchMapping = {
 
 const LAYER_PATTERNS: Record<string, { folderPatterns: string[]; filePatterns: RegExp[] }> = {
   application: {
-    folderPatterns: ['app', 'application', 'main', 'startup', 'program'],
-    filePatterns: [/\.app\.ts$/, /main\.ts$/, /^index\.ts$/],
+    folderPatterns: ['app', 'application', 'main', 'startup', 'program', 'main.tsx'],
+    filePatterns: [/\.app\.tsx?$/, /^main\.tsx?$/, /^app\.tsx?$/, /^index\.tsx?$/],
   },
   interface: {
-    folderPatterns: ['api', 'controllers', 'routes', 'handlers', 'mcp', 'hook-receiver'],
-    filePatterns: [/\.controller\.ts$/, /\.route\.ts$/, /\.handler\.ts$/, /\.endpoint\.ts$/],
+    folderPatterns: ['api', 'controllers', 'routes', 'handlers', 'mcp', 'hook-receiver', 'components', 'icons'],
+    filePatterns: [/\.controller\.ts$/, /\.route\.ts$/, /\.handler\.ts$/, /\.endpoint\.ts$/, /\.component\.tsx?$/, /\.modal\.tsx?$/, /\.panel\.tsx?$/],
   },
   usecase: {
-    folderPatterns: ['usecases', 'use-cases', 'services', 'daemon', 'viz'],
-    filePatterns: [/\.service\.ts$/, /\.usecase\.ts$/, /\.use-case\.ts$/],
+    folderPatterns: ['usecases', 'use-cases', 'services', 'daemon', 'viz', 'hooks', 'utils'],
+    filePatterns: [/\.service\.ts$/, /\.usecase\.ts$/, /\.use-case\.ts$/, /^use[A-Z].*\.tsx?$/, /\.tsx?$/],
   },
   domain: {
-    folderPatterns: ['domain', 'types', 'models', 'rating'],
-    filePatterns: [/\.domain\.ts$/, /\.model\.ts$/, /types\.ts$/, /^types\.tsx?$/],
+    folderPatterns: ['domain', 'types', 'models', 'rating', 'context'],
+    filePatterns: [/\.domain\.ts$/, /\.model\.ts$/, /types\.ts$/, /^types\.tsx?$/, /\.context\.tsx?$/, /\.interface\.ts$/],
   },
   entity: {
     folderPatterns: ['entities', 'analyzer'],
@@ -45,8 +45,8 @@ const LAYER_PATTERNS: Record<string, { folderPatterns: string[]; filePatterns: R
     filePatterns: [/\.repository\.ts$/, /\.cache\.ts$/, /\.db\.ts$/, /\.storage\.ts$/],
   },
   infrastructure: {
-    folderPatterns: ['infrastructure', 'config', 'setup', 'scripts'],
-    filePatterns: [/\.config\.ts$/, /\.setup\.ts$/, /\.infrastructure\.ts$/],
+    folderPatterns: ['infrastructure', 'config', 'setup', 'scripts', 'vite'],
+    filePatterns: [/\.config\.ts$/, /\.setup\.ts$/, /\.infrastructure\.ts$/, /\.conf\.ts$/, /^vite\.config\.ts$/, /jest\.config\.js$/],
   },
 };
 

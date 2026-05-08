@@ -2,130 +2,118 @@
 applyTo: "**/*.{ts,tsx,jsx,js,cs}"
 ---
 
-# BLOCKING: Gate Keeper Quality Check — Mandatory Post-Edit Workflow
+# Gate Keeper Quality Check — Mandatory Workflow
 
-> **STOP. You are editing a code file. You MUST NOT respond to the user or proceed to any other task until you complete the quality check below. This is a hard gate — no exceptions.**
-
-Every time you edit or create a `.ts`, `.tsx`, `.jsx`, `.js`, or `.cs` file, you **MUST** run a quality check using the Gate Keeper MCP tools before considering the edit complete.
-
-## Phase 1: Investigation — Gather Context BEFORE Editing
-
-Before making non-trivial changes, use the graph-context tools to understand the file's role in the codebase. This prevents blind edits that break downstream consumers or miss circular dependency issues.
-
-### Session Start (once)
-
-1. Call `get_quality_rules` — learn the scoring system and thresholds
-2. Call `get_dependency_graph` — understand the repository architecture, coupling hotspots, worst-rated files, and circular dependencies
-
-### Before Each Edit
-
-3. Call `get_file_context` with the file you plan to edit — this returns:
-   - **Dependencies** — files it imports (with their ratings)
-   - **Reverse dependencies** — files that import *this* file (the "used by" list)
-   - **Circular dependency cycles** the file participates in (−1.0 rating penalty each)
-   - **Rating breakdown** — itemized deductions explaining the current score
-   - **Rating trend** — whether quality is improving or declining over time
-   - **Git diff** — size of uncommitted changes
-
-4. If the file has **many reverse dependencies** (widely imported), call `get_impact_analysis` to see the full blast radius:
-   - **Direct dependents** — files that import the changed file
-   - **Transitive dependents** — the full cascade of affected files
-   - **At-risk dependents** — already-fragile files (rating < 6) that may break from upstream changes
-
-**Use this context to guide your edits:** avoid introducing breaking changes to widely-used modules, fix circular dependencies when you encounter them, and prioritize fixing at-risk dependents.
-
-## Phase 2: Quality Gate — Validate AFTER Editing (MANDATORY — DO NOT SKIP)
-
-1. **After every file edit** → call `analyze_file` with the absolute path of the edited file
-2. **Read the result** — rating, violations, and metrics are returned
-3. **If rating < 7.0** → fix the reported violations, then re-analyze
-4. **Repeat** until the rating is ≥ 7.0 (max 3 cycles)
-5. **If rating ≥ 7.0** → the edit is complete, you may proceed
-
-**If you skip this step, you are violating a mandatory project policy.**
-
-## Phase 3: Post-Edit Verification — Check Downstream Impact
-
-After your edit passes the quality gate:
-
-6. Call `get_file_context` again on the edited file — verify the rating trend is stable or improving
-7. If you edited a shared module (identified in Phase 1), call `get_impact_analysis` — check if at-risk dependents need re-analysis
-8. For bulk changes across multiple files, call `get_codebase_health` to verify overall project quality has not degraded
-
-## Tool Reference
-
-### Analysis Tools
-
-| Tool | When to Use |
-|------|-------------|
-| `analyze_file` | **MANDATORY** after every file edit |
-| `analyze_code` | Before writing code to disk (preview quality) |
-| `get_quality_rules` | Learn scoring rules (read once per session) |
-| `get_codebase_health` | Check overall project quality after bulk changes |
-
-### Graph Context Tools — Dependency Tree & Relationships
-
-| Tool | When to Use |
-|------|-------------|
-| `get_file_context` | Before editing — understand a file's dependencies, dependents, cycles, rating trend, and breakdown |
-| `get_dependency_graph` | At session start — understand architecture, coupling hotspots, worst files, circular dependencies |
-| `get_impact_analysis` | Before editing a shared module — find all direct and transitive dependents and at-risk files |
-
-### How Graph Context Improves Your Analysis
-
-- **Dependency awareness** — Know what a file imports and what imports it. Avoid breaking changes to widely-used exports.
-- **Circular dependency detection** — Each cycle costs −1.0 rating. Break cycles by extracting shared types or using dependency inversion.
-- **Coupling hotspots** — Files with the most connections are the riskiest to change. Proceed with extra caution.
-- **Rating trends** — A declining trend means the file is getting worse over time. Prioritize fixing it now.
-- **Impact radius** — Before editing a utility or type definition, check how many files will be affected downstream.
-- **At-risk dependents** — Files already below rating 6 are fragile. Upstream changes may push them further down.
-
-## Fix Priority
-
-Fix violations in this order (highest impact first):
-1. **Errors** (−1.5 pts each): missing `key` props, empty catch blocks
-2. **Warnings** (−0.5 pts each): `any` usage, god classes, long methods, tight coupling
-3. **Info** (−0.1 pts each): console.log statements
-4. **Circular dependencies** (−1.0 each): break import cycles between files
-
-## Do NOT
-
-- Skip the quality check after editing code files
-- Ignore violations and move on to the next task
-- Edit widely-imported files without checking impact analysis first
-- Use `any` type — use specific types or `unknown`
-- Leave empty catch blocks — always handle or log errors
-- Write methods longer than 50 lines
-- Ignore circular dependency warnings — they compound rating penalties
+> **Every code action (plan, create, edit) must pass through the gate-keeper MCP tools. No exceptions.**
 
 ---
 
-## New Tools — Use These Proactively
+## Tool Cheat Sheet
 
-### After fixing violations
+| Trigger | Tools to call |
+|---------|--------------|
+| Session start | `get_quality_rules` → `get_dependency_graph` |
+| Planning a change | `get_file_context` → `get_impact_analysis` (if widely imported) → `predict_impact_with_remediation` |
+| Creating a new file | `analyze_code` (preview before writing) → `analyze_file` (after writing) |
+| Editing an existing file | `get_file_context` → edit → `analyze_file` → `suggest_refactoring` (if rating < 7.0) |
+| Rating still < 7.0 after fix | `analyze_file` again → repeat up to 3 cycles |
+| After bulk changes (3+ files) | `get_codebase_health` |
+| Starting a cleanup sprint | `get_violation_patterns` |
 
-Call `suggest_refactoring` after `analyze_file` returns a rating below 7.0. This gives you ranked, step-by-step instructions specific to the violations found.
+---
 
-### Before editing a widely-imported file
+## Phase 0 — Session Start (once per session)
 
-Call `predict_impact_with_remediation` before editing any file that is imported by many others. This identifies at-risk downstream files and provides targeted remediation steps.
+```
+get_quality_rules          ← learn scoring thresholds
+get_dependency_graph       ← see architecture, coupling hotspots, circular deps, worst-rated files
+```
 
-### Starting a cleanup sprint
+---
 
-Call `get_violation_patterns` to get a ranked table of all violation types across the codebase with estimated rating gains. This tells you where to spend effort first.
+## Phase 1 — Before Any Change (plan or edit)
 
-## Quality Thresholds Reference
+```
+get_file_context <file>
+```
+Returns: dependencies, reverse deps, circular cycles (−1.0 each), rating breakdown, trend, git diff.
 
-- Minimum passing rating: **7.0/10**
-- Error violations: −1.5 pts each
-- Warning violations: −0.5 pts each
-- Info violations: −0.1 pts each
-- Cyclomatic complexity >20: −2.0 | >10: −1.0
-- Import count >30: −2.0 | >15: −0.5
-- Lines of code >500: −1.5 | >300: −0.5
-- Circular dependency: −1.0 per cycle
-- Test coverage <30%: −2.5 | <50%: −2.0 | <80%: −1.0
+If the file has **many reverse dependencies**:
+```
+get_impact_analysis <file>           ← direct + transitive dependents, at-risk files (rating < 6)
+predict_impact_with_remediation <file> ← targeted remediation steps for at-risk downstream files
+```
 
-## MCP Server Setup
+---
 
-The Gate Keeper MCP server runs via `npm run mcp:dev`. Configure it in VS Code via `.vscode/mcp.json` (see `docs/copilot-setup.md`).
+## Phase 2 — Writing Code
+
+### New file
+```
+analyze_code <code string>   ← preview quality BEFORE writing to disk
+```
+Write the file only if the preview rating ≥ 7.0, or adjust the code first.
+
+### Existing file
+Edit the file, then immediately:
+
+---
+
+## Phase 3 — After Every Edit (MANDATORY)
+
+```
+analyze_file <absolute path>
+```
+
+| Rating | Action |
+|--------|--------|
+| ≥ 7.0 | ✅ Done — proceed |
+| < 7.0 | Call `suggest_refactoring` → fix violations → `analyze_file` again (max 3 cycles) |
+
+---
+
+## Phase 4 — Post-Edit Verification
+
+```
+get_file_context <file>     ← confirm rating trend is stable or improving
+```
+
+After bulk changes (3+ files):
+```
+get_codebase_health         ← verify overall project quality has not degraded
+```
+
+---
+
+## Fix Priority
+
+1. **Errors −1.5 each** — missing `key` props, empty catch blocks
+2. **Warnings −0.5 each** — `any` types, god classes, long methods (>50 lines), tight coupling
+3. **Circular deps −1.0 each** — break import cycles via shared types or dependency inversion
+4. **Info −0.1 each** — console.log statements
+
+---
+
+## Hard Rules
+
+- Never use `any` — use specific types or `unknown`
+- Never leave empty catch blocks
+- Never skip `analyze_file` after editing a code file
+- Never edit a widely-imported file without running `get_impact_analysis` first
+
+---
+
+## Quality Thresholds
+
+| Metric | Deduction |
+|--------|-----------|
+| Error violation | −1.5 |
+| Warning violation | −0.5 |
+| Info violation | −0.1 |
+| Cyclomatic complexity >20 / >10 | −2.0 / −1.0 |
+| Import count >30 / >15 | −2.0 / −0.5 |
+| Lines >500 / >300 | −1.5 / −0.5 |
+| Circular dependency | −1.0 per cycle |
+| Test coverage <30% / <50% / <80% | −2.5 / −2.0 / −1.0 |
+
+**Minimum passing rating: 7.0 / 10**
