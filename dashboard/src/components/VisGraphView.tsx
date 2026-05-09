@@ -56,11 +56,19 @@ interface VisNodeData {
 
 interface VisEdgeData {
   id: string;
+  from?: string;
+  to?: string;
   color?: { color: string; highlight: string };
   width?: number;
   _isCircular?: boolean;
   dashes?: boolean | number[];
   _violation?: ArchViolation;
+  smooth?: {
+    enabled: boolean;
+    type: string;
+    forceDirection: string;
+    roundness: number;
+  };
 }
 
 interface NetworkRefs {
@@ -96,6 +104,74 @@ function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) 
       })
       .catch(() => { /* network errors are acceptable */ });
   }, [selectedRepo, refs.pinnedRef]);
+}
+
+// ── Arch Edge Routing (fan-out parallel edges, layer-distance arcs) ──
+function applyArchEdgeRouting(
+  visEdges: VisEdgeData[],
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  archConfig: ArchMapping,
+): void {
+  const nodeLayerMap = buildNodeLayerMap(nodes, archConfig);
+  const layerOrder = [...archConfig.layers]
+    .sort((a, b) => a.order - b.order)
+    .map(l => l.id);
+  const layerIndex = new Map<string, number>(
+    layerOrder.map((id, i) => [id, i]),
+  );
+
+  // Group edges by (sourceLayer, targetLayer) pair
+  const layerPairEdges = new Map<string, VisEdgeData[]>();
+  for (const edge of visEdges) {
+    const srcLayer = nodeLayerMap.get(edge.from!);
+    const tgtLayer = nodeLayerMap.get(edge.to!);
+    if (!srcLayer || !tgtLayer) continue;
+    const key = `${srcLayer}\x00${tgtLayer}`;
+    if (!layerPairEdges.has(key)) layerPairEdges.set(key, []);
+    layerPairEdges.get(key)!.push(edge);
+  }
+
+  // Fan out edges per layer pair
+  for (const pairEdges of layerPairEdges.values()) {
+    if (pairEdges.length === 0) continue;
+
+    const first = pairEdges[0];
+    const srcLayer = nodeLayerMap.get(first.from!)!;
+    const tgtLayer = nodeLayerMap.get(first.to!)!;
+    const srcIdx = layerIndex.get(srcLayer) ?? 0;
+    const tgtIdx = layerIndex.get(tgtLayer) ?? 0;
+    const layerDistance = Math.abs(tgtIdx - srcIdx);
+    // Base roundness grows with layer span — edges crossing more layers
+    // need a tighter arc to clear intermediate nodes.
+    const baseRoundness = 0.2 + layerDistance * 0.08;
+
+    if (pairEdges.length === 1) {
+      // Single edge: CW curve with roundness proportional to span
+      pairEdges[0].smooth = {
+        enabled: true,
+        type: 'curvedCW',
+        forceDirection: 'horizontal',
+        roundness: Math.min(baseRoundness + 0.2, 0.85),
+      };
+    } else {
+      // Multiple parallel edges between the same layer pair:
+      // alternate curvedCW/curvedCCW and increase roundness with offset
+      // from the median, fanning them apart vertically.
+      const halfCount = (pairEdges.length - 1) / 2;
+      pairEdges.forEach((edge, i) => {
+        const offset = i - halfCount;
+        const direction = offset <= 0 ? 'curvedCW' : 'curvedCCW';
+        const roundness = baseRoundness + Math.abs(offset) * 0.15;
+        edge.smooth = {
+          enabled: true,
+          type: direction,
+          forceDirection: 'horizontal',
+          roundness: Math.min(roundness, 0.9),
+        };
+      });
+    }
+  }
 }
 
 // ── Sync node and edge updates ────────────────────────────
@@ -187,6 +263,12 @@ function useSyncGraphData(
           edge.dashes = [...ARCH_ALLOWED_EDGE_STYLE.dashes];
         }
       }
+    }
+
+    // In arch mode, apply per-edge smooth routing to fan out parallel
+    // edges and increase arc roundness for multi-layer spans.
+    if (archMode && archConfig) {
+      applyArchEdgeRouting(visEdges, graphData.nodes, graphData.edges, archConfig);
     }
 
     refs.edgesDS.current.add(visEdges);
@@ -521,7 +603,11 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
         refs.nodesDS.current.update(nodeUpdates);
 
         refs.edgesDS.current.clear();
-        refs.edgesDS.current.add(buildVisEdges(graphDataRef.current, T));
+        const rebuiltEdges = buildVisEdges(graphDataRef.current, T);
+        if (archModeRef.current && archConfigRef.current) {
+          applyArchEdgeRouting(rebuiltEdges, graphDataRef.current.nodes, graphDataRef.current.edges, archConfigRef.current);
+        }
+        refs.edgesDS.current.add(rebuiltEdges);
       }
     }
 

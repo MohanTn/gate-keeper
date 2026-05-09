@@ -3,10 +3,10 @@ import type { ArchLayer } from './arch-layers';
 
 // ── Layout Constants (Container-style Wrapping Grid) ──────────
 export const NODE_HORIZONTAL_GAP = 220;
-export const NODE_VERTICAL_GAP = 90;
+export const NODE_VERTICAL_GAP = 150;
 export const NODE_HEIGHT = 60;
 export const LAYER_PADDING = 60;
-export const LAYER_GUTTER = 80;
+export const LAYER_GUTTER = 120;
 export const MAX_INNER_COLS = 4;
 export const ARCH_HEADER_HEIGHT = 36;
 export const CONTAINER_RADIUS = 12;

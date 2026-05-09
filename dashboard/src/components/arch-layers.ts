@@ -358,8 +358,26 @@ export function buildNodeLayerMap(
   const map = new Map<string, ArchLayer>();
   const fileMap = archMapping ? { ...archMapping.files, ...archMapping.overrides } : undefined;
   const layerConfigs = archMapping ? [] : LAYER_CONFIG;
+
+  // When fileMap exists but keys are relative paths and node IDs are absolute,
+  // pre-build a suffix lookup: longest key first to avoid false matches.
+  const suffixEntries = fileMap
+    ? Object.entries(fileMap).sort((a, b) => b[0].length - a[0].length)
+    : undefined;
+
   for (const node of nodes) {
-    map.set(node.id, classifyNodeToLayer(node.id, fileMap, layerConfigs));
+    let layer = classifyNodeToLayer(node.id, fileMap, layerConfigs);
+    // fileMap present but direct lookup failed → try matching by relative-path suffix
+    // (handles daemon sending absolute paths while arch.json stores relative paths)
+    if (layer === 'unknown' && suffixEntries) {
+      for (const [relPath, mappedLayer] of suffixEntries) {
+        if (node.id.endsWith('/' + relPath)) {
+          layer = mappedLayer;
+          break;
+        }
+      }
+    }
+    map.set(node.id, layer);
   }
   return map;
 }
