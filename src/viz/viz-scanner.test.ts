@@ -57,7 +57,14 @@ describe('viz-scanner', () => {
     });
 
     it('completes with 0 files', async () => {
-      await scan(deps());
+      const testDir = path.join(__dirname, '../../temp-scanner-scan-' + Date.now());
+      tempDirs.push(testDir);
+      fs.mkdirSync(testDir, { recursive: true });
+
+      const d = deps();
+      d.workDir = testDir;
+
+      await scan(d);
       expect(scanning).toBe(false);
       expect(broadcastCalls.some(c => c.type === 'scan_complete')).toBe(true);
     });
