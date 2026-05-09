@@ -90,7 +90,7 @@ export function buildVisEdges(graphData: GraphData, theme: ThemeTokens = T): any
             },
             width: isCirc ? 2.5 : 2,
             arrows: { to: { enabled: true, scaleFactor: 0.4, type: 'arrow' } },
-            smooth: { type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
+            smooth: { enabled: true, type: 'cubicBezier', forceDirection: 'horizontal', roundness: 0.4 },
             dashes: isCirc ? [6, 4] : false,
             _isCircular: isCirc,
         };

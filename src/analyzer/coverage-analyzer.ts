@@ -32,9 +32,15 @@ export interface CoverageResult {
  * Searches upward from the analyzed file's directory for common
  * coverage report locations produced by Jest, Istanbul/NYC, Vitest, etc.
  */
+interface CoverageCacheEntry {
+    lcovPath: string;
+    mtimeMs: number;
+    data: Map<string, FileCoverage>;
+}
+
 export class CoverageAnalyzer {
-    /** Cache: project root → parsed coverage map */
-    private coverageCache = new Map<string, Map<string, FileCoverage>>();
+    /** Per-project cache entry tracking both parsed data and file modification time. */
+    private coverageCache = new Map<string, CoverageCacheEntry>();
 
     /** Max time (ms) to wait for a test runner to produce coverage. */
     private static readonly RUNNER_TIMEOUT_MS = 30_000;
@@ -308,17 +314,29 @@ export class CoverageAnalyzer {
      * Searches for LCOV files in common locations.
      */
     private loadCoverageData(projectRoot: string): Map<string, FileCoverage> | null {
-        if (this.coverageCache.has(projectRoot)) {
-            return this.coverageCache.get(projectRoot)!;
+        const cached = this.coverageCache.get(projectRoot);
+        if (cached) {
+            try {
+                const stat = fs.statSync(cached.lcovPath);
+                if (stat.mtimeMs === cached.mtimeMs) {
+                    return cached.data;
+                }
+            } catch {
+                // stat failed (ENOENT, EACCES, etc.) — fall through to re-search
+            }
         }
 
         const lcovPath = this.findLcovFile(projectRoot);
-        if (!lcovPath) return null;
+        if (!lcovPath) {
+            this.coverageCache.delete(projectRoot);
+            return null;
+        }
 
         try {
             const content = fs.readFileSync(lcovPath, 'utf8');
             const coverageMap = this.parseLcov(content, projectRoot);
-            this.coverageCache.set(projectRoot, coverageMap);
+            const stat = fs.statSync(lcovPath);
+            this.coverageCache.set(projectRoot, { lcovPath, mtimeMs: stat.mtimeMs, data: coverageMap });
             return coverageMap;
         } catch {
             return null;
