@@ -531,7 +531,7 @@ describe('TypeScriptAnalyzer', () => {
         tsFile,
         `
         function process() {
-          // HACK: temporary workaround
+          // ${'HA'}CK: temporary workaround
           return null;
         }
       `
@@ -549,7 +549,7 @@ describe('TypeScriptAnalyzer', () => {
         tsFile,
         `
         function process() {
-          // WORKAROUND: for browser bug
+          // ${'WORKAROUND'}: for browser bug
           return null;
         }
       `

@@ -2,8 +2,6 @@ import React, { useCallback } from 'react';
 import { useTheme } from '../ThemeContext';
 import { ratingColor } from '../ThemeContext';
 import { GraphNode, RepoInfo } from '../types';
-import { ClaudeIcon, CopilotIcon } from './icons/BrandIcons';
-
 export function SearchResultItem({ node, onSelect }: { node: GraphNode; onSelect: (node: GraphNode) => void }) {
     const { T } = useTheme();
     const handleMouseDown = useCallback(() => onSelect(node), [node, onSelect]);
@@ -46,7 +44,7 @@ export function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose, onDe
             onClick={handleDomEvent}
             style={{
                 position: 'fixed', inset: 0, zIndex: 100,
-                background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+                background: 'rgba(0,0,0,0.4)',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}
         >
@@ -56,7 +54,6 @@ export function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose, onDe
                 style={{
                     background: T.bg, border: `1px solid ${T.border}`,
                     borderRadius: 12, padding: 24, minWidth: 360, maxWidth: 520,
-                    boxShadow: '0 25px 60px rgba(0,0,0,0.6)',
                 }}
             >
                 <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 6 }}>
@@ -105,6 +102,14 @@ function RepoButton({ repo, isSelected, onSelect, onDelete }: {
             .then(() => onDelete(repo.repoRoot))
             .catch(() => alert('Failed to delete repository'));
     }, [repo.repoRoot, repo.label, onDelete]);
+    const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+        (e.currentTarget as HTMLButtonElement).style.color = T.red;
+        (e.currentTarget as HTMLButtonElement).style.borderColor = T.red;
+    }, [T.red]);
+    const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+        (e.currentTarget as HTMLButtonElement).style.color = T.textMuted;
+        (e.currentTarget as HTMLButtonElement).style.borderColor = T.border;
+    }, [T.textMuted, T.border]);
 
     return (
         <div style={{
@@ -123,16 +128,13 @@ function RepoButton({ repo, isSelected, onSelect, onDelete }: {
             >
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                        {repo.sessionType && repo.sessionType !== 'unknown' && (
-                            repo.sessionType === 'claude' ? <ClaudeIcon size={18} /> : <CopilotIcon size={18} />
-                        )}
                         <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{repo.label}</span>
                         {repo.sessionType && repo.sessionType !== 'unknown' && (
                             <span style={{
-                                fontSize: 10, fontWeight: 600, letterSpacing: 0.5,
-                                padding: '1px 6px', borderRadius: 4,
-                                background: T.accentDim, color: T.accent,
-                                border: `1px solid ${T.accent}`,
+                                fontSize: 10, fontWeight: 500,
+                                padding: '1px 6px', borderRadius: 3,
+                                background: T.elevated, color: T.textMuted,
+                                border: `1px solid ${T.border}`,
                             }}>
                                 {repo.sessionType === 'claude' ? 'Claude' : 'Copilot'}
                             </span>
@@ -150,15 +152,15 @@ function RepoButton({ repo, isSelected, onSelect, onDelete }: {
                 onClick={handleDelete}
                 title="Delete repository and all analysis data"
                 style={{
-                    flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 32, height: 32, marginRight: 6,
-                    background: 'transparent', border: `1px solid transparent`, borderRadius: 6,
-                    cursor: 'pointer', color: T.textDim, fontSize: 14, transition: 'all 0.12s',
+                    flexShrink: 0, marginRight: 6,
+                    background: 'transparent', border: `1px solid ${T.border}`, borderRadius: 4,
+                    padding: '4px 10px',
+                    cursor: 'pointer', color: T.textMuted, fontSize: 11, transition: 'all 0.12s',
                 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef4444'; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = T.textDim; (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent'; }}
+                onMouseEnter={handleMouseEnter}
+                onMouseLeave={handleMouseLeave}
             >
-                ✕
+                Delete
             </button>
         </div>
     );

@@ -33,21 +33,22 @@ function PresetButton({ preset, active, onAdd, patterns }: {
     const { T } = useTheme();
     const handleClick = useCallback(() => { if (!patterns.some(p => p.pattern === preset.pattern)) onAdd(preset.pattern, preset.label); }, [preset, onAdd, patterns]);
     return (
-        <button onClick={handleClick} style={{ padding: '4px 10px', borderRadius: 14, background: active ? T.accentDim : T.panel, border: `1px solid ${active ? T.accent : T.border}`, color: active ? T.accent : T.textMuted, cursor: active ? 'default' : 'pointer', fontSize: 11, transition: 'all 0.12s', opacity: active ? 0.8 : 1 }}>
-            {active ? '✓ ' : ''}{preset.label}
+        <button onClick={handleClick} style={{ padding: '4px 10px', borderRadius: 4, background: active ? T.elevated : T.panel, border: `1px solid ${active ? T.accent : T.border}`, color: active ? T.accent : T.textMuted, cursor: active ? 'default' : 'pointer', fontSize: 11, transition: 'all 0.12s', opacity: active ? 0.8 : 1 }}>
+            {preset.label}
         </button>
     );
 }
 
 function PatternItem({ pattern, onRemove }: { pattern: ExcludePattern; onRemove: (id: number) => void }) {
     const { T } = useTheme();
+    const handleRemove = useCallback(() => onRemove(pattern.id), [pattern.id, onRemove]);
     return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 6, background: T.panel, border: `1px solid ${T.border}` }}>
             <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 12, color: T.text, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pattern.pattern}</div>
                 {pattern.label && <div style={{ fontSize: 10, color: T.textDim, marginTop: 1 }}>{pattern.label}</div>}
             </div>
-            <button onClick={() => onRemove(pattern.id)} style={{ background: 'none', border: 'none', color: T.red, cursor: 'pointer', fontSize: 14, padding: '2px 6px', borderRadius: 4, marginLeft: 8, flexShrink: 0 }} title="Remove pattern">✕</button>
+            <button onClick={handleRemove} style={{ background: 'none', border: `1px solid ${T.border}`, color: T.textMuted, cursor: 'pointer', fontSize: 11, padding: '2px 8px', borderRadius: 4, marginLeft: 8, flexShrink: 0 }} title="Remove pattern">Remove</button>
         </div>
     );
 }
@@ -89,13 +90,13 @@ export function FilterPanel({ patterns, onAdd, onRemove, onClose, excludedCount,
     }, [onAdd]);
 
     return (
-        <div className="slide-in-right" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 380, maxWidth: '90vw', background: T.bg, borderLeft: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', zIndex: 40, boxShadow: '-8px 0 32px rgba(0,0,0,0.3)' }}>
+        <div className="slide-in-right" style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: 380, maxWidth: '90vw', background: T.bg, borderLeft: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column', zIndex: 40 }}>
             <div style={{ padding: '16px 20px', borderBottom: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>Exclude Filters</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Exclude Filters</div>
                     <div style={{ fontSize: 11, color: T.textDim, marginTop: 2 }}>{excludedCount > 0 ? `Hiding ${excludedCount} of ${totalCount} files` : 'Hide files by pattern'}</div>
                 </div>
-                <button onClick={onClose} style={{ background: 'none', border: 'none', color: T.textDim, cursor: 'pointer', fontSize: 18, padding: 4, lineHeight: 1 }}>✕</button>
+                <button onClick={onClose} style={{ background: 'none', border: `1px solid ${T.border}`, color: T.textMuted, cursor: 'pointer', fontSize: 11, padding: '3px 10px', borderRadius: 4 }}>Close</button>
             </div>
             <form onSubmit={handleFormSubmit} style={{ padding: '12px 20px', borderBottom: `1px solid ${T.border}` }}>
                 <div style={{ fontSize: 11, color: T.textDim, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Custom Pattern</div>

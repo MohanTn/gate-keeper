@@ -70,7 +70,7 @@ export function isFileExcludedByScanConfig(filePath: string, ext: string): boole
   });
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const payload = await readStdin();
   if (!payload) return;
 
@@ -156,7 +156,7 @@ async function main(): Promise<void> {
   }
 }
 
-function readStdin(): Promise<HookPayload | null> {
+export function readStdin(): Promise<HookPayload | null> {
   return new Promise(resolve => {
     let data = '';
     process.stdin.setEncoding('utf8');
@@ -173,7 +173,7 @@ function readStdin(): Promise<HookPayload | null> {
   });
 }
 
-async function ensureDaemonRunning(): Promise<void> {
+export async function ensureDaemonRunning(): Promise<void> {
   if (isDaemonAlive()) return;
 
   if (!fs.existsSync(DAEMON_SCRIPT)) return;
@@ -189,7 +189,7 @@ async function ensureDaemonRunning(): Promise<void> {
   await sleep(300);
 }
 
-function isDaemonAlive(): boolean {
+export function isDaemonAlive(): boolean {
   try {
     const pid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
     if (isNaN(pid)) return false;
@@ -200,7 +200,7 @@ function isDaemonAlive(): boolean {
   }
 }
 
-function isSessionRegistered(sessionId: string): boolean {
+export function isSessionRegistered(sessionId: string): boolean {
   try {
     return fs.existsSync(path.join(SESSIONS_DIR, sessionId));
   } catch {
@@ -208,21 +208,21 @@ function isSessionRegistered(sessionId: string): boolean {
   }
 }
 
-function markSessionRegistered(sessionId: string): void {
+export function markSessionRegistered(sessionId: string): void {
   try {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
     fs.writeFileSync(path.join(SESSIONS_DIR, sessionId), String(Date.now()));
   } catch { }
 }
 
-function findGitRoot(dir: string): string {
+export function findGitRoot(dir: string): string {
   const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: dir, encoding: 'utf8', timeout: 3000
   });
   return (result.status === 0 && result.stdout.trim()) ? result.stdout.trim() : dir;
 }
 
-function sendToDaemon(filePath: string): Promise<AnalyzeResponse | null> {
+export function sendToDaemon(filePath: string): Promise<AnalyzeResponse | null> {
   const repoRoot = findGitRoot(path.dirname(filePath));
   return new Promise(resolve => {
     const body = JSON.stringify({ filePath, repoRoot });
@@ -260,7 +260,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-async function registerRepository(sessionPayload: SessionCreatePayload): Promise<void> {
+export async function registerRepository(sessionPayload: SessionCreatePayload): Promise<void> {
   const workspacePath = sessionPayload.session_info.workspace_path;
   const gitRoot = sessionPayload.session_info.git_root || findGitRoot(workspacePath);
   const sessionType = sessionPayload.session_info.session_type || 'unknown';

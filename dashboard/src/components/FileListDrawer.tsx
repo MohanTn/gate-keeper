@@ -48,6 +48,24 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
     setScrollTop(e.currentTarget.scrollTop);
   }, []);
 
+  const handleCloseBtnEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.color = T.text;
+  }, [T.text]);
+  const handleCloseBtnLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.color = T.textMuted;
+  }, [T.textMuted]);
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setState(prev => ({ ...prev, search: e.target.value }));
+  }, []);
+
+  const handleSearchFocus = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    e.currentTarget.style.borderColor = T.accent;
+  }, [T.accent]);
+  const handleSearchBlur = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
+    e.currentTarget.style.borderColor = T.border;
+  }, [T.border]);
+
   const handleSort = useCallback((field: SortField) => {
     setState(prev => {
       if (prev.sortField === field) {
@@ -94,24 +112,23 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
       style={{
         flex: `0 0 ${width}px`, background: T.panel, borderLeft: `1px solid ${T.border}`,
         display: 'flex', flexDirection: 'column',
-        boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
         overflow: 'hidden',
       }}
     >
         {/* Header */}
         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>All Files</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>All Files</span>
             <button
               onClick={onClose}
               style={{
-                background: 'none', border: 'none', color: T.textFaint, cursor: 'pointer',
-                fontSize: 18, lineHeight: 1, padding: '2px 6px',
+                background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
+                borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 11,
               }}
-              onMouseEnter={e => { e.currentTarget.style.color = T.text; }}
-              onMouseLeave={e => { e.currentTarget.style.color = T.textFaint; }}
+              onMouseEnter={handleCloseBtnEnter}
+              onMouseLeave={handleCloseBtnLeave}
             >
-              ×
+              Close
             </button>
           </div>
 
@@ -127,24 +144,19 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
           </div>
 
           {/* Search */}
-          <div style={{ position: 'relative' }}>
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: T.textDim, pointerEvents: 'none' }}>
-              ⌕
-            </span>
-            <input
-              type="text"
-              value={search}
-              onChange={e => setState(prev => ({ ...prev, search: e.target.value }))}
-              placeholder="Filter files…"
-              style={{
-                width: '100%', padding: '7px 10px 7px 30px',
-                background: T.elevated, border: `1px solid ${T.border}`,
-                borderRadius: 6, color: T.text, fontSize: 13, outline: 'none',
-              }}
-              onFocus={e => { e.currentTarget.style.borderColor = T.accent; }}
-              onBlur={e => { e.currentTarget.style.borderColor = T.border; }}
-            />
-          </div>
+          <input
+            type="text"
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Filter files…"
+            style={{
+              width: '100%', padding: '6px 10px',
+              background: T.elevated, border: `1px solid ${T.border}`,
+              borderRadius: 4, color: T.text, fontSize: 12, outline: 'none',
+            }}
+            onFocus={handleSearchFocus}
+            onBlur={handleSearchBlur}
+          />
         </div>
 
         {/* Column headers */}
@@ -200,9 +212,10 @@ function SortHeader({ field, label, active, dir, onSort }: {
   field: SortField; label: string; active: boolean; dir: 'asc' | 'desc'; onSort: (f: SortField) => void;
 }) {
   const { T } = useTheme();
+  const handleClick = useCallback(() => onSort(field), [field, onSort]);
   return (
     <div
-      onClick={() => onSort(field)}
+      onClick={handleClick}
       style={{
         fontSize: 10, color: active ? T.accent : T.textDim,
         textTransform: 'uppercase', letterSpacing: 0.8,
@@ -217,17 +230,24 @@ function SortHeader({ field, label, active, dir, onSort }: {
 const FileRow = memo(function FileRow({ node, onSelect }: { node: GraphNode; onSelect: (n: GraphNode) => void }) {
   const { T } = useTheme();
   const errCount = node.violations.filter(v => v.severity === 'error').length;
+  const rowOnClick = useCallback(() => onSelect(node), [node, onSelect]);
+  const rowOnMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = T.panelHover;
+  }, [T.panelHover]);
+  const rowOnMouseLeave = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  }, []);
   return (
     <div
-      onClick={() => onSelect(node)}
+      onClick={rowOnClick}
       style={{
         display: 'grid', gridTemplateColumns: '1fr 80px 50px 50px',
         alignItems: 'center', padding: '0 20px',
         height: ITEM_HEIGHT, boxSizing: 'border-box',
         borderBottom: `1px solid ${T.border}`, cursor: 'pointer', transition: 'background 0.1s',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = T.panelHover; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      onMouseEnter={rowOnMouseEnter}
+      onMouseLeave={rowOnMouseLeave}
     >
       <div style={{ overflow: 'hidden' }}>
         <div style={{ fontSize: 13, color: T.text, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -237,11 +257,8 @@ const FileRow = memo(function FileRow({ node, onSelect }: { node: GraphNode; onS
           <div style={{ fontSize: 10, color: T.red, marginTop: 1 }}>{errCount} error{errCount !== 1 ? 's' : ''}</div>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <div style={{ width: 44, height: 4, background: T.border, borderRadius: 2, overflow: 'hidden' }}>
-          <div style={{ width: `${(node.rating / 10) * 100}%`, height: '100%', background: rc(node.rating, T), borderRadius: 2 }} />
-        </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: rc(node.rating, T), minWidth: 20 }}>{node.rating}</span>
+      <div style={{ textAlign: 'right' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: rc(node.rating, T) }}>{node.rating}</span>
       </div>
       <div style={{ fontSize: 12, color: T.textMuted, textAlign: 'right' }}>{node.metrics.linesOfCode}</div>
       <div style={{

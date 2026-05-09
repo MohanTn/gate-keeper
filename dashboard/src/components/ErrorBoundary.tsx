@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo } from 'react';
+import React, { Component, ErrorInfo, useCallback } from 'react';
 import { GraphData, GraphNode } from '../types';
 import { ThemeTokens } from '../ThemeContext';
 
@@ -28,6 +28,10 @@ export class GraphErrorBoundary extends Component<ErrorBoundaryProps, ErrorBound
     console.error('[Gate Keeper] Graph render error:', error.message, info.componentStack);
   }
 
+  private handleRetry = () => {
+    this.setState({ hasError: false, error: null });
+  };
+
   render() {
     if (this.state.hasError) {
       return (
@@ -36,7 +40,7 @@ export class GraphErrorBoundary extends Component<ErrorBoundaryProps, ErrorBound
           onNodeSelect={this.props.onNodeSelect}
           T={this.props.T}
           error={this.state.error?.message ?? 'Unknown error'}
-          onRetry={() => this.setState({ hasError: false, error: null })}
+          onRetry={this.handleRetry}
         />
       );
     }
@@ -121,28 +125,7 @@ function FallbackTable({
           </thead>
           <tbody>
             {sorted.map(node => (
-              <tr key={node.id} onClick={() => onNodeSelect?.(node)}
-                style={{ borderBottom: `1px solid ${T.border}`, cursor: onNodeSelect ? 'pointer' : 'default' }}
-                onMouseEnter={e => { e.currentTarget.style.background = T.panelHover; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                <Td T={T}>
-                  <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>{node.label}</div>
-                  <div style={{ fontSize: 10, color: T.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>{node.id}</div>
-                </Td>
-                <Td T={T} align="center">
-                  <span style={{ fontWeight: 700, color: healthColor(node.rating, T) }}>{node.rating}</span>
-                </Td>
-                <Td T={T} align="center">
-                  <span style={{ fontSize: 11, fontWeight: 600, color: healthColor(node.rating, T), padding: '2px 8px', borderRadius: 3, background: `${healthColor(node.rating, T)}18`, border: `1px solid ${healthColor(node.rating, T)}40` }}>{healthLabel(node.rating)}</span>
-                </Td>
-                <Td T={T} align="right">{node.metrics.linesOfCode}</Td>
-                <Td T={T} align="right">
-                  <span style={{ color: node.violations.length > 0 ? T.yellow : T.textFaint, fontWeight: node.violations.length > 0 ? 600 : 400 }}>{node.violations.length}</span>
-                </Td>
-                <Td T={T} align="right">
-                  <span style={{ color: node.violations.filter(v => v.severity === 'error').length > 0 ? T.red : T.textFaint }}>{node.violations.filter(v => v.severity === 'error').length}</span>
-                </Td>
-              </tr>
+              <TableRow key={node.id} node={node} T={T} onNodeSelect={onNodeSelect} />
             ))}
           </tbody>
         </table>
@@ -166,4 +149,38 @@ function Th({ children, T, align = 'left' }: { children: React.ReactNode; T: The
 
 function Td({ children, T, align = 'left' }: { children: React.ReactNode; T: ThemeTokens; align?: 'left' | 'center' | 'right' }) {
   return <td style={{ padding: '10px 16px', fontSize: 13, color: T.text, textAlign: align }}>{children}</td>;
+}
+
+function TableRow({ node, T, onNodeSelect }: { node: GraphNode; T: ThemeTokens; onNodeSelect?: (n: GraphNode) => void }) {
+  const handleClick = useCallback(() => onNodeSelect?.(node), [node, onNodeSelect]);
+  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLTableRowElement>) => {
+    e.currentTarget.style.background = T.panelHover;
+  }, [T.panelHover]);
+  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLTableRowElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  }, []);
+  return (
+    <tr onClick={handleClick}
+      style={{ borderBottom: `1px solid ${T.border}`, cursor: onNodeSelect ? 'pointer' : 'default' }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}>
+      <Td T={T}>
+        <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>{node.label}</div>
+        <div style={{ fontSize: 10, color: T.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>{node.id}</div>
+      </Td>
+      <Td T={T} align="center">
+        <span style={{ fontWeight: 700, color: healthColor(node.rating, T) }}>{node.rating}</span>
+      </Td>
+      <Td T={T} align="center">
+        <span style={{ fontSize: 11, fontWeight: 600, color: healthColor(node.rating, T), padding: '2px 8px', borderRadius: 3, background: `${healthColor(node.rating, T)}18`, border: `1px solid ${healthColor(node.rating, T)}40` }}>{healthLabel(node.rating)}</span>
+      </Td>
+      <Td T={T} align="right">{node.metrics.linesOfCode}</Td>
+      <Td T={T} align="right">
+        <span style={{ color: node.violations.length > 0 ? T.yellow : T.textFaint, fontWeight: node.violations.length > 0 ? 600 : 400 }}>{node.violations.length}</span>
+      </Td>
+      <Td T={T} align="right">
+        <span style={{ color: node.violations.filter(v => v.severity === 'error').length > 0 ? T.red : T.textFaint }}>{node.violations.filter(v => v.severity === 'error').length}</span>
+      </Td>
+    </tr>
+  );
 }

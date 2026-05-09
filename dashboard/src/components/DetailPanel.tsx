@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, memo } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
 import { ThemeTokens, useTheme } from '../ThemeContext';
 
@@ -52,6 +52,15 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
     return tgt === node.id;
   });
 
+  const handleCloseBtnEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.borderColor = T.borderBright;
+    e.currentTarget.style.color = T.text;
+  }, [T.borderBright, T.text]);
+  const handleCloseBtnLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.borderColor = T.border;
+    e.currentTarget.style.color = T.textMuted;
+  }, [T.border, T.textMuted]);
+
   return (
     <div
       className="slide-in-right"
@@ -59,7 +68,6 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
         position: 'absolute', top: 0, right: 0, bottom: 0,
         width: 420, background: T.panel, borderLeft: `1px solid ${T.border}`,
         display: 'flex', flexDirection: 'column', zIndex: 20,
-        boxShadow: '-8px 0 32px rgba(0,0,0,0.3)',
       }}
     >
       {/* Header */}
@@ -69,13 +77,12 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
             onClick={onClose}
             style={{
               background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
-              borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12,
-              display: 'flex', alignItems: 'center', gap: 4,
+              borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11,
             }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderBright; e.currentTarget.style.color = T.text; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.textMuted; }}
+            onMouseEnter={handleCloseBtnEnter}
+            onMouseLeave={handleCloseBtnLeave}
           >
-            ← Back
+            Close
           </button>
           <LangBadge lang={node.type} />
         </div>
@@ -95,35 +102,24 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 24px' }}>
 
         {/* Health score + status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '18px 0', borderBottom: `1px solid ${T.border}` }}>
-          <div style={{
-            width: 64, height: 64, borderRadius: 12,
-            background: T.elevated, border: `2px solid ${rc(node.rating, T)}`,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ fontSize: 24, fontWeight: 800, color: rc(node.rating, T), lineHeight: 1 }}>{node.rating}</span>
-            <span style={{ fontSize: 10, color: T.textDim }}>/10</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: 13, color: T.textMuted }}>Rating:</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: rc(node.rating, T) }}>{node.rating} / 10</span>
+            <span style={{ fontSize: 12, color: T.textMuted }}>({healthLabel(node.rating)})</span>
           </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: rc(node.rating, T) }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: rc(node.rating, T) }}>
-                {healthLabel(node.rating)}
-              </span>
+          {detail?.gitDiff ? (
+            <div style={{ fontSize: 12, color: T.textFaint }}>
+              <span style={{ color: T.green }}>+{detail.gitDiff.added}</span>
+              {' / '}
+              <span style={{ color: T.red }}>−{detail.gitDiff.removed}</span>
+              {' lines changed'}
             </div>
-            {detail?.gitDiff ? (
-              <div style={{ fontSize: 12, color: T.textFaint }}>
-                <span style={{ color: T.green }}>+{detail.gitDiff.added}</span>
-                {' / '}
-                <span style={{ color: T.red }}>−{detail.gitDiff.removed}</span>
-                {' lines changed'}
-              </div>
-            ) : (
-              <div style={{ fontSize: 12, color: T.textDim }}>
-                {loading ? 'Loading…' : 'No uncommitted changes'}
-              </div>
-            )}
-          </div>
+          ) : (
+            <div style={{ fontSize: 12, color: T.textDim }}>
+              {loading ? 'Loading…' : 'No uncommitted changes'}
+            </div>
+          )}
         </div>
 
         {/* Metrics */}
@@ -142,8 +138,8 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
         {detail && (
           <Section label="Rating Breakdown">
             {detail.ratingBreakdown.length === 0 ? (
-              <div style={{ fontSize: 13, color: T.green, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>✓</span> No deductions — clean file
+              <div style={{ fontSize: 13, color: T.green }}>
+                No deductions — clean file
               </div>
             ) : (
               <div>
@@ -256,12 +252,13 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
                 const tgt = typeof e.target === 'string' ? e.target : e.target.id;
                 const targetNode = graphData.nodes.find(n => n.id === tgt);
                 return (
-                  <DepRow
+                  <DepRowItem
                     key={i}
                     label={tgt.split('/').pop() ?? tgt}
                     rating={targetNode?.rating}
                     clickable={!!targetNode}
-                    onClick={() => { if (targetNode) onNodeSelect(targetNode); }}
+                    node={targetNode}
+                    onNodeSelect={onNodeSelect}
                   />
                 );
               })}
@@ -277,12 +274,13 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
                 const src = typeof e.source === 'string' ? e.source : e.source.id;
                 const sourceNode = graphData.nodes.find(n => n.id === src);
                 return (
-                  <DepRow
+                  <DepRowItem
                     key={i}
                     label={src.split('/').pop() ?? src}
                     rating={sourceNode?.rating}
                     clickable={!!sourceNode}
-                    onClick={() => { if (sourceNode) onNodeSelect(sourceNode); }}
+                    node={sourceNode}
+                    onNodeSelect={onNodeSelect}
                   />
                 );
               })}
@@ -335,10 +333,26 @@ function LangBadge({ lang }: { lang: string }) {
   );
 }
 
+const DepRowItem = memo(function DepRowItem({ label, rating, clickable, node, onNodeSelect }: {
+  label: string; rating?: number; clickable: boolean;
+  node: GraphNode | undefined; onNodeSelect: (n: GraphNode) => void;
+}) {
+  const handleClick = useCallback(() => {
+    if (node) onNodeSelect(node);
+  }, [node, onNodeSelect]);
+  return <DepRow label={label} rating={rating} clickable={clickable} onClick={handleClick} />;
+});
+
 function DepRow({ label, rating, clickable, onClick }: {
   label: string; rating?: number; clickable: boolean; onClick: () => void;
 }) {
   const { T } = useTheme();
+  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (clickable) e.currentTarget.style.background = T.panelHover;
+  }, [clickable, T.panelHover]);
+  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  }, []);
   return (
     <div
       onClick={clickable ? onClick : undefined}
@@ -347,8 +361,8 @@ function DepRow({ label, rating, clickable, onClick }: {
         padding: '5px 8px', borderRadius: 5, cursor: clickable ? 'pointer' : 'default',
         fontSize: 13, color: clickable ? T.accent : T.textDim,
       }}
-      onMouseEnter={e => { if (clickable) e.currentTarget.style.background = T.panelHover; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       <span>→ {label}</span>
       {rating != null && (
@@ -391,7 +405,7 @@ function CopyButton({ node }: { node: GraphNode }) {
         cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0,
       }}
     >
-      {copied ? '✓ Copied' : 'Copy'}
+      {copied ? 'Copied' : 'Copy'}
     </button>
   );
 }
