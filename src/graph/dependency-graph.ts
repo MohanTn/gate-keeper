@@ -7,6 +7,10 @@ export interface CycleInfo {
 export class DependencyGraph {
   private analyses = new Map<string, FileAnalysis>();
 
+  remove(filePath: string): boolean {
+    return this.analyses.delete(filePath);
+  }
+
   upsert(analysis: FileAnalysis): void {
     this.analyses.set(analysis.path, analysis);
   }
