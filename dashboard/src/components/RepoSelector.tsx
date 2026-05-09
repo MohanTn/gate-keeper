@@ -26,11 +26,12 @@ export function SearchResultItem({ node, onSelect }: { node: GraphNode; onSelect
     );
 }
 
-export function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
+export function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose, onDelete }: {
     repos: RepoInfo[];
     selectedRepo: string | null;
     onSelect: (repo: string) => void;
     onClose: () => void;
+    onDelete: (repoRoot: string) => void;
 }) {
     const { T } = useTheme();
     const handleDomEvent = useCallback(
@@ -66,7 +67,7 @@ export function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {repos.map(r => (
-                        <RepoButton key={r.repoRoot} repo={r} isSelected={selectedRepo === r.repoRoot} onSelect={onSelect} />
+                        <RepoButton key={r.repoRoot} repo={r} isSelected={selectedRepo === r.repoRoot} onSelect={onSelect} onDelete={onDelete} />
                     ))}
                 </div>
                 <button
@@ -84,48 +85,81 @@ export function RepoSelectorModal({ repos, selectedRepo, onSelect, onClose }: {
     );
 }
 
-function RepoButton({ repo, isSelected, onSelect }: {
+function RepoButton({ repo, isSelected, onSelect, onDelete }: {
     repo: RepoInfo;
     isSelected: boolean;
     onSelect: (repo: string) => void;
+    onDelete: (repoRoot: string) => void;
 }) {
     const { T } = useTheme();
     const handleClick = useCallback(() => onSelect(repo.repoRoot), [repo.repoRoot, onSelect]);
+    const handleDelete = useCallback((e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (!window.confirm(`Delete "${repo.label}" and all its analysis data? This cannot be undone.`)) return;
+        fetch('/api/repos', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ repoRoot: repo.repoRoot }),
+        })
+            .then(r => r.json())
+            .then(() => onDelete(repo.repoRoot))
+            .catch(() => alert('Failed to delete repository'));
+    }, [repo.repoRoot, repo.label, onDelete]);
+
     return (
-        <button
-            onClick={handleClick}
-            style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                background: isSelected ? T.accentDim : T.panel,
-                border: `1px solid ${isSelected ? T.accent : T.border}`,
-                borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
-                color: T.text, textAlign: 'left', transition: 'all 0.12s',
-            }}
-        >
-            <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-                    {repo.sessionType && repo.sessionType !== 'unknown' && (
-                        repo.sessionType === 'claude' ? <ClaudeIcon size={18} /> : <CopilotIcon size={18} />
-                    )}
-                    <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{repo.label}</span>
-                    {repo.sessionType && repo.sessionType !== 'unknown' && (
-                        <span style={{
-                            fontSize: 10, fontWeight: 600, letterSpacing: 0.5,
-                            padding: '1px 6px', borderRadius: 4,
-                            background: T.accentDim, color: T.accent,
-                            border: `1px solid ${T.accent}`,
-                        }}>
-                            {repo.sessionType === 'claude' ? 'Claude' : 'Copilot'}
-                        </span>
-                    )}
+        <div style={{
+            display: 'flex', alignItems: 'center',
+            background: isSelected ? T.accentDim : T.panel,
+            border: `1px solid ${isSelected ? T.accent : T.border}`,
+            borderRadius: 8, overflow: 'hidden', transition: 'all 0.12s',
+        }}>
+            <button
+                onClick={handleClick}
+                style={{
+                    flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    background: 'transparent', border: 'none', padding: '10px 14px', cursor: 'pointer',
+                    color: T.text, textAlign: 'left',
+                }}
+            >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                        {repo.sessionType && repo.sessionType !== 'unknown' && (
+                            repo.sessionType === 'claude' ? <ClaudeIcon size={18} /> : <CopilotIcon size={18} />
+                        )}
+                        <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>{repo.label}</span>
+                        {repo.sessionType && repo.sessionType !== 'unknown' && (
+                            <span style={{
+                                fontSize: 10, fontWeight: 600, letterSpacing: 0.5,
+                                padding: '1px 6px', borderRadius: 4,
+                                background: T.accentDim, color: T.accent,
+                                border: `1px solid ${T.accent}`,
+                            }}>
+                                {repo.sessionType === 'claude' ? 'Claude' : 'Copilot'}
+                            </span>
+                        )}
+                    </div>
+                    <div style={{ fontSize: 11, color: T.textDim, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {repo.repoRoot}
+                    </div>
                 </div>
-                <div style={{ fontSize: 11, color: T.textDim, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {repo.repoRoot}
+                <div style={{ fontSize: 12, color: T.textFaint, marginLeft: 16, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                    {repo.fileCount} file{repo.fileCount !== 1 ? 's' : ''}
                 </div>
-            </div>
-            <div style={{ fontSize: 12, color: T.textFaint, marginLeft: 16, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                {repo.fileCount} file{repo.fileCount !== 1 ? 's' : ''}
-            </div>
-        </button>
+            </button>
+            <button
+                onClick={handleDelete}
+                title="Delete repository and all analysis data"
+                style={{
+                    flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 32, height: 32, marginRight: 6,
+                    background: 'transparent', border: `1px solid transparent`, borderRadius: 6,
+                    cursor: 'pointer', color: T.textDim, fontSize: 14, transition: 'all 0.12s',
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; (e.currentTarget as HTMLButtonElement).style.borderColor = '#ef4444'; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = T.textDim; (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent'; }}
+            >
+                ✕
+            </button>
+        </div>
     );
 }

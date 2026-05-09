@@ -19,6 +19,15 @@ interface ScannerDeps {
   setScanning: (v: boolean) => void;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`Timed out after ${ms}ms: ${label}`)), ms)
+    ),
+  ]);
+}
+
 export async function scan(deps: ScannerDeps): Promise<void> {
   if (deps.getScanning()) return;
   deps.setScanning(true);

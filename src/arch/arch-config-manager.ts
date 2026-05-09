@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ArchLayerDef, ArchMapping } from '../types';
+import { ArchConnection, ArchLayerDef, ArchMapping } from '../types';
+
+export const ARCH_CONFIG_VERSION = '1.1';
 
 export const DEFAULT_LAYERS: ArchLayerDef[] = [
   { id: 'application', label: 'Application Layer', color: 'rgba(219,39,119,0.08)', order: 0 },
@@ -12,9 +14,23 @@ export const DEFAULT_LAYERS: ArchLayerDef[] = [
   { id: 'infrastructure', label: 'Infrastructure Layer', color: 'rgba(239,68,68,0.08)', order: 6 },
 ];
 
+// Derive linear allowed-transition pairs from layer order: every (i, j) with j > i.
+// This preserves v1.0 semantics — outer layer can depend on any more-inner layer.
+export function deriveConnectionsFromOrder(layers: ArchLayerDef[]): ArchConnection[] {
+  const sorted = [...layers].sort((a, b) => a.order - b.order);
+  const out: ArchConnection[] = [];
+  for (let i = 0; i < sorted.length; i++) {
+    for (let j = i + 1; j < sorted.length; j++) {
+      out.push({ from: sorted[i].id, to: sorted[j].id });
+    }
+  }
+  return out;
+}
+
 export const DEFAULT_ARCH_CONFIG: ArchMapping = {
-  version: '1.0',
+  version: ARCH_CONFIG_VERSION,
   layers: DEFAULT_LAYERS,
+  connections: deriveConnectionsFromOrder(DEFAULT_LAYERS),
   files: {},
   overrides: {},
 };
@@ -54,6 +70,24 @@ export function getArchFilePath(repoRoot: string): string {
   return path.join(repoRoot, '.gate-keeper', 'arch.json');
 }
 
+// Drop connections referencing unknown layer ids; warn but never throw.
+function sanitizeConnections(
+  connections: ArchConnection[] | undefined,
+  layers: ArchLayerDef[],
+): ArchConnection[] | undefined {
+  if (!connections) return undefined;
+  const knownIds = new Set(layers.map(l => l.id));
+  const valid: ArchConnection[] = [];
+  for (const c of connections) {
+    if (knownIds.has(c.from) && knownIds.has(c.to)) {
+      valid.push(c);
+    } else {
+      console.warn(`arch.json: dropping connection ${c.from}→${c.to} (unknown layer id)`);
+    }
+  }
+  return valid;
+}
+
 export function readArchConfig(repoRoot: string): ArchMapping {
   try {
     const filePath = getArchFilePath(repoRoot);
@@ -62,7 +96,10 @@ export function readArchConfig(repoRoot: string): ArchMapping {
     }
     const content = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(content) as ArchMapping;
-    return { ...DEFAULT_ARCH_CONFIG, ...parsed };
+    const layers = parsed.layers ?? DEFAULT_LAYERS;
+    const connections = sanitizeConnections(parsed.connections, layers)
+      ?? deriveConnectionsFromOrder(layers);
+    return { ...DEFAULT_ARCH_CONFIG, ...parsed, layers, connections };
   } catch (error) {
     console.warn(`Failed to read arch config from ${repoRoot}:`, error);
     return { ...DEFAULT_ARCH_CONFIG };
@@ -76,7 +113,15 @@ export function writeArchConfig(repoRoot: string, config: ArchMapping): void {
       fs.mkdirSync(archDir, { recursive: true });
     }
     const filePath = getArchFilePath(repoRoot);
-    fs.writeFileSync(filePath, JSON.stringify(config, null, 2), 'utf-8');
+    // Preserve key order: version, layers, connections, files, overrides
+    const ordered: ArchMapping = {
+      version: ARCH_CONFIG_VERSION,
+      layers: config.layers,
+      connections: config.connections ?? deriveConnectionsFromOrder(config.layers),
+      files: config.files,
+      overrides: config.overrides,
+    };
+    fs.writeFileSync(filePath, JSON.stringify(ordered, null, 2), 'utf-8');
   } catch (error) {
     console.error(`Failed to write arch config to ${repoRoot}:`, error);
   }

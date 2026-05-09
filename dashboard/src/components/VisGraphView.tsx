@@ -12,17 +12,18 @@ import {
 } from './graph-utils';
 import {
   computeArchLayerPositions,
+  computeFullArchLayout,
   detectArchViolations,
   buildNodeLayerMap,
-  getLayerBands,
   getViolationSourceNodes,
   ARCH_VIOLATION_EDGE_STYLE,
+  ARCH_ALLOWED_EDGE_STYLE,
   ARCH_VIOLATION_NODE_BORDER,
   ARCH_VIOLATION_NODE_BORDER_WIDTH,
-  ARCH_CANVAS_PADDING,
   type ArchViolation,
   type ViolationType,
 } from './arch-layers';
+import { drawLayerContainer } from './arch-rendering';
 
 // ── Props ──────────────────────────────────────────────────
 interface VisGraphViewProps {
@@ -127,7 +128,7 @@ function useSyncGraphData(
     refs.treePositionsRef.current.clear();
     for (const [k, v] of positions) refs.treePositionsRef.current.set(k, v);
 
-    const visNodes = buildVisNodes(graphData.nodes, refs.pinnedRef.current, refs.treePositionsRef.current, T);
+    const visNodes = buildVisNodes(graphData.nodes, refs.pinnedRef.current, refs.treePositionsRef.current, T, archMode);
     const currentIds = new Set(refs.nodesDS.current.getIds() as string[]);
     const newIds = new Set(visNodes.map(n => n.id as string));
 
@@ -157,7 +158,7 @@ function useSyncGraphData(
     if (archMode) {
       const nodeLayerMap = buildNodeLayerMap(graphData.nodes, archConfig || undefined);
       const layerOrder = archConfig?.layers?.sort((a, b) => a.order - b.order).map(l => l.id);
-      const allViolations = detectArchViolations(graphData.edges, nodeLayerMap, layerOrder);
+      const allViolations = detectArchViolations(graphData.edges, nodeLayerMap, layerOrder, archConfig?.connections);
 
       // Filter violations by type and confidence threshold
       const filteredViolations = new Map(
@@ -169,17 +170,21 @@ function useSyncGraphData(
       for (const edge of visEdges) {
         if (filteredViolations.has(edge.id)) {
           const violation = filteredViolations.get(edge.id)!;
-          // Color by severity: error=red, warning=orange, info=yellow
-          const severityColor = violation.severity === 'error' ? '#ef4444' : violation.severity === 'warning' ? '#f97316' : '#eab308';
-          edge.color = { color: severityColor, highlight: '#dc2626' };
-          edge.width = 2.5;
-          edge.dashes = [4, 4];
+          const severityColor = violation.severity === 'error' ? ARCH_VIOLATION_EDGE_STYLE.color : violation.severity === 'warning' ? '#f97316' : '#eab308';
+          edge.color = { color: severityColor, highlight: ARCH_VIOLATION_EDGE_STYLE.highlightColor };
+          edge.width = ARCH_VIOLATION_EDGE_STYLE.width;
+          edge.dashes = [...ARCH_VIOLATION_EDGE_STYLE.dashes];
           edge._violation = violation;
         } else if (violationOnly) {
           // In violation-only mode, dim all non-violation edges
           edge.color = { color: T.edgeDim, highlight: T.edgeDim };
           edge.width = 0.3;
           edge.dashes = false;
+        } else {
+          // Allowed cross-layer edges: dashed gray, low contrast
+          edge.color = { color: ARCH_ALLOWED_EDGE_STYLE.color, highlight: ARCH_ALLOWED_EDGE_STYLE.highlightColor };
+          edge.width = ARCH_ALLOWED_EDGE_STYLE.width;
+          edge.dashes = [...ARCH_ALLOWED_EDGE_STYLE.dashes];
         }
       }
     }
@@ -193,7 +198,7 @@ function useSyncGraphData(
 
     const nodeLayerMap = buildNodeLayerMap(graphData.nodes, archConfig || undefined);
     const layerOrder = archConfig?.layers?.sort((a, b) => a.order - b.order).map(l => l.id);
-    const allViolations = detectArchViolations(graphData.edges, nodeLayerMap, layerOrder);
+    const allViolations = detectArchViolations(graphData.edges, nodeLayerMap, layerOrder, archConfig?.connections);
     const filteredViolations = new Map(
       Array.from(allViolations.entries()).filter(([, violation]) =>
         filters[violation.type] && violation.confidence >= minConf
@@ -338,29 +343,21 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
     let lastHoverUpdatedIds: string[] = [];
     let lastHoverEdgeIds: string[] = [];
 
-    // Register beforeDrawing handler for arch layer swimlanes
+    // Register beforeDrawing handler for arch layer container boxes
     network.on('beforeDrawing', (ctx: CanvasRenderingContext2D) => {
       if (!archModeRef.current) return;
 
-      const nodeLayerMap = buildNodeLayerMap(graphDataRef.current.nodes, archConfigRef.current || undefined);
-      const bands = getLayerBands(graphDataRef.current.nodes, refs.treePositionsRef.current, nodeLayerMap, archConfigRef.current || undefined);
+      const layout = computeFullArchLayout(
+        graphDataRef.current.nodes,
+        archConfigRef.current || undefined,
+        graphDataRef.current.edges,
+      );
 
-      for (const band of bands) {
-        // Draw swimlane background
-        ctx.fillStyle = band.color;
-        ctx.fillRect(
-          band.x - ARCH_CANVAS_PADDING.x,
-          band.minY - ARCH_CANVAS_PADDING.y,
-          band.width + ARCH_CANVAS_PADDING.x * 2,
-          band.height + ARCH_CANVAS_PADDING.y * 2
-        );
-
-        // Draw layer label in top-left corner of the swimlane padding area
-        ctx.fillStyle = T.textMuted;
-        ctx.font = 'bold 13px Inter, sans-serif';
-        ctx.textAlign = 'left';
-        ctx.fillText(band.label, band.x - ARCH_CANVAS_PADDING.x + 12, band.minY - ARCH_CANVAS_PADDING.y + 20);
+      ctx.save();
+      for (const geom of layout.geometry.values()) {
+        drawLayerContainer(ctx, geom, layout.globalMinY, layout.globalMaxY);
       }
+      ctx.restore();
     });
 
     const eventHandlers = createNetworkEventHandlers(graphDataRef, onNodeClickRef, onCanvasClickRef, selectedRepoRef, refs, T);
@@ -681,8 +678,8 @@ export function VisGraphView({
     [archConfig]
   );
   const allViolations = useMemo(
-    () => archMode ? detectArchViolations(graphData.edges, nodeLayerMap!, layerOrder) : new Map(),
-    [archMode, graphData.edges, nodeLayerMap, layerOrder]
+    () => archMode ? detectArchViolations(graphData.edges, nodeLayerMap!, layerOrder, archConfig?.connections) : new Map(),
+    [archMode, graphData.edges, nodeLayerMap, layerOrder, archConfig?.connections]
   );
   const filteredViolations = useMemo(
     () => new Map(

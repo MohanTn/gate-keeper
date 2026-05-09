@@ -1,7 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { Violation } from '../types';
+
+const execFileAsync = promisify(execFile);
 
 export interface FileCoverage {
     filePath: string;
@@ -181,11 +184,11 @@ export class CoverageAnalyzer {
      * Run the test file with coverage enabled and parse the resulting LCOV
      * to get per-line coverage for the source file.
      */
-    private runCoverageForFile(
+    private async runCoverageForFile(
         sourceFile: string,
         testFile: string,
         projectRoot: string,
-    ): CoverageResult | null {
+    ): Promise<CoverageResult | null> {
         const runner = this.detectTestRunner(projectRoot);
         if (!runner) return null;
 
@@ -198,14 +201,14 @@ export class CoverageAnalyzer {
         if (!args) return null;
 
         try {
-            execFileSync(npxBin, args, {
+            await execFileAsync(npxBin, args, {
                 cwd: projectRoot,
                 timeout: CoverageAnalyzer.RUNNER_TIMEOUT_MS,
-                stdio: 'pipe',
+                maxBuffer: 10 * 1024 * 1024,
                 env: { ...process.env, NODE_ENV: 'test' },
             });
         } catch {
-            // Test failures are okay — coverage is still generated
+            // Test failures and timeouts are okay — coverage may still have been generated
         }
 
         const lcovPath = path.join(tmpDir, 'lcov.info');
@@ -213,7 +216,7 @@ export class CoverageAnalyzer {
 
         try {
             const lcov = fs.readFileSync(lcovPath, 'utf8');
-            const coverageMap = this.parseLcov(lcov);
+            const coverageMap = this.parseLcov(lcov, projectRoot);
             const fileCoverage = this.findFileCoverage(coverageMap, resolvedSource);
 
             // Clean up temp coverage dir
@@ -314,7 +317,7 @@ export class CoverageAnalyzer {
 
         try {
             const content = fs.readFileSync(lcovPath, 'utf8');
-            const coverageMap = this.parseLcov(content);
+            const coverageMap = this.parseLcov(content, projectRoot);
             this.coverageCache.set(projectRoot, coverageMap);
             return coverageMap;
         } catch {
@@ -350,7 +353,7 @@ export class CoverageAnalyzer {
      *   LH:8
      *   end_of_record
      */
-    private parseLcov(content: string): Map<string, FileCoverage> {
+    private parseLcov(content: string, projectRoot?: string): Map<string, FileCoverage> {
         const coverageMap = new Map<string, FileCoverage>();
         const records = content.split('end_of_record');
 
@@ -361,7 +364,12 @@ export class CoverageAnalyzer {
             const sfMatch = trimmed.match(/^SF:(.+)$/m);
             if (!sfMatch) continue;
 
-            const filePath = path.resolve(sfMatch[1].trim());
+            const rawPath = sfMatch[1].trim();
+            // Jest/Istanbul emit project-relative SF paths; resolve against projectRoot
+            // so they match the absolute paths used elsewhere in the analyzer.
+            const filePath = path.isAbsolute(rawPath)
+                ? rawPath
+                : path.resolve(projectRoot ?? process.cwd(), rawPath);
             const lines = new Map<number, number>();
             let linesFound = 0;
             let linesHit = 0;

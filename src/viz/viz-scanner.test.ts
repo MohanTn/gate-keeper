@@ -15,6 +15,7 @@ describe('viz-scanner', () => {
   let broadcastCalls: WSMessage[];
   let logCalls: Array<{ msg: string; level?: string }>;
   let scanning = false;
+  let tempDirs: string[] = [];
 
   const deps = () => ({
     cache, analyzer, config,
@@ -37,11 +38,15 @@ describe('viz-scanner', () => {
     broadcastCalls = [];
     logCalls = [];
     scanning = false;
+    tempDirs = [];
   });
 
   afterEach(() => {
     cache.close();
     if (fs.existsSync(testDbPath)) fs.unlinkSync(testDbPath);
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   describe('scan', () => {
@@ -52,17 +57,23 @@ describe('viz-scanner', () => {
     });
 
     it('completes with 0 files', async () => {
-      await scan(deps());
+      const testDir = path.join(__dirname, '../../temp-scanner-scan-' + Date.now());
+      tempDirs.push(testDir);
+      fs.mkdirSync(testDir, { recursive: true });
+
+      const d = deps();
+      d.workDir = testDir;
+
+      await scan(d);
       expect(scanning).toBe(false);
       expect(broadcastCalls.some(c => c.type === 'scan_complete')).toBe(true);
     });
 
     it('scans supported files in workDir', async () => {
-      // Create a temp test file
       const testDir = path.join(__dirname, '../../temp-scan-test-' + Date.now());
+      tempDirs.push(testDir);
       fs.mkdirSync(testDir, { recursive: true });
-      const testFile = path.join(testDir, 'test.ts');
-      fs.writeFileSync(testFile, 'export const x = 1;\n');
+      fs.writeFileSync(path.join(testDir, 'test.ts'), 'export const x = 1;\n');
 
       const d = deps();
       d.workDir = testDir;
@@ -72,9 +83,6 @@ describe('viz-scanner', () => {
       expect(scanning).toBe(false);
       expect(broadcastCalls.some(c => c.type === 'scan_start')).toBe(true);
       expect(broadcastCalls.some(c => c.type === 'scan_complete')).toBe(true);
-
-      fs.unlinkSync(testFile);
-      fs.rmdirSync(testDir);
     });
   });
 
@@ -93,6 +101,7 @@ describe('viz-scanner', () => {
 
     it('scans files in repo root', async () => {
       const testDir = path.join(__dirname, '../../temp-repo-scan-' + Date.now());
+      tempDirs.push(testDir);
       fs.mkdirSync(testDir, { recursive: true });
       fs.writeFileSync(path.join(testDir, 'a.ts'), 'export const a = 1;\n');
       fs.writeFileSync(path.join(testDir, 'b.ts'), 'export const b = 2;\n');
@@ -102,18 +111,13 @@ describe('viz-scanner', () => {
       expect(scanning).toBe(false);
       expect(broadcastCalls.some(c => c.type === 'scan_start')).toBe(true);
       expect(broadcastCalls.some(c => c.type === 'scan_complete')).toBe(true);
-
-      // Cleanup
-      fs.unlinkSync(path.join(testDir, 'a.ts'));
-      fs.unlinkSync(path.join(testDir, 'b.ts'));
-      fs.rmdirSync(testDir);
     });
 
     it('skips cached files when not forced', async () => {
       const testDir = path.join(__dirname, '../../temp-repo-scan2-' + Date.now());
+      tempDirs.push(testDir);
       fs.mkdirSync(testDir, { recursive: true });
-      const testFile = path.join(testDir, 'c.ts');
-      fs.writeFileSync(testFile, 'export const c = 1;\n');
+      fs.writeFileSync(path.join(testDir, 'c.ts'), 'export const c = 1;\n');
 
       // First scan
       await scanRepo(deps(), testDir);
@@ -124,24 +128,18 @@ describe('viz-scanner', () => {
       await scanRepo(deps(), testDir);
       // No scan_start because no new files
       expect(broadcastCalls.some(c => c.type === 'scan_start')).toBe(false);
-
-      fs.unlinkSync(testFile);
-      fs.rmdirSync(testDir);
     });
 
     it('re-scans when forced', async () => {
       const testDir = path.join(__dirname, '../../temp-repo-scan3-' + Date.now());
+      tempDirs.push(testDir);
       fs.mkdirSync(testDir, { recursive: true });
-      const testFile = path.join(testDir, 'd.ts');
-      fs.writeFileSync(testFile, 'export const d = 1;\n');
+      fs.writeFileSync(path.join(testDir, 'd.ts'), 'export const d = 1;\n');
 
       await scanRepo(deps(), testDir);
       await scanRepo(deps(), testDir, true); // force
 
       expect(broadcastCalls.filter(c => c.type === 'scan_start').length).toBeGreaterThanOrEqual(2);
-
-      fs.unlinkSync(testFile);
-      fs.rmdirSync(testDir);
     });
   });
 });

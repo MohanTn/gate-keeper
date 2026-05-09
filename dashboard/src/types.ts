@@ -7,9 +7,16 @@ export interface ArchLayerDef {
   order: number;
 }
 
+export interface ArchConnection {
+  from: string;
+  to: string;
+}
+
 export interface ArchMapping {
   version: string;
   layers: ArchLayerDef[];
+  // Literal allowed cross-layer edges (v1.1+). Undefined → derive from layer.order.
+  connections?: ArchConnection[];
   files: Record<string, string>;      // path → layerId (auto-detected)
   overrides: Record<string, string>;  // path → layerId (user-set, never overwritten)
 }

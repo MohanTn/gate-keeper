@@ -1,5 +1,5 @@
 {
-  "version": "1.0",
+  "version": "1.1",
   "layers": [
     {
       "id": "application",
@@ -44,11 +44,49 @@
       "order": 6
     }
   ],
+  "connections": [
+    {
+      "from": "application",
+      "to": "interface"
+    },
+    {
+      "from": "application",
+      "to": "usecase"
+    },
+    {
+      "from": "interface",
+      "to": "usecase"
+    },
+    {
+      "from": "interface",
+      "to": "domain"
+    },
+    {
+      "from": "usecase",
+      "to": "domain"
+    },
+    {
+      "from": "usecase",
+      "to": "entity"
+    },
+    {
+      "from": "domain",
+      "to": "entity"
+    },
+    {
+      "from": "entity",
+      "to": "data"
+    },
+    {
+      "from": "data",
+      "to": "infrastructure"
+    }
+  ],
   "files": {
     "dashboard/jest.config.js": "infrastructure",
     "dashboard/jest.setup.js": "unknown",
     "dashboard/src/App.test.tsx": "usecase",
-    "dashboard/src/App.tsx": "unknown",
+    "dashboard/src/App.tsx": "application",
     "dashboard/src/ThemeContext.test.tsx": "usecase",
     "dashboard/src/ThemeContext.tsx": "usecase",
     "dashboard/src/__mocks__/react-force-graph-2d.js": "unknown",
@@ -67,7 +105,7 @@
     "dashboard/src/components/DetailPanel.test.tsx": "interface",
     "dashboard/src/components/DetailPanel.tsx": "interface",
     "dashboard/src/components/FileListDrawer.test.tsx": "interface",
-    "dashboard/src/components/FileListDrawer.tsx": "unknown",
+    "dashboard/src/components/FileListDrawer.tsx": "interface",
     "dashboard/src/components/FilterPanel.tsx": "interface",
     "dashboard/src/components/GraphView.test.tsx": "interface",
     "dashboard/src/components/GraphView.tsx": "interface",
@@ -82,16 +120,16 @@
     "dashboard/src/components/ViolationsPanel.test.tsx": "interface",
     "dashboard/src/components/ViolationsPanel.tsx": "interface",
     "dashboard/src/components/VisGraphView.test.tsx": "interface",
-    "dashboard/src/components/VisGraphView.tsx": "unknown",
+    "dashboard/src/components/VisGraphView.tsx": "interface",
     "dashboard/src/components/arch-layers.ts": "interface",
     "dashboard/src/components/graph-utils.test.ts": "interface",
     "dashboard/src/components/graph-utils.ts": "interface",
     "dashboard/src/components/icons/BrandIcons.tsx": "interface",
-    "dashboard/src/hooks/index.ts": "unknown",
+    "dashboard/src/hooks/index.ts": "application",
     "dashboard/src/hooks/useClearData.ts": "usecase",
     "dashboard/src/hooks/useExcludePatterns.ts": "usecase",
     "dashboard/src/hooks/useNodeHandlers.ts": "usecase",
-    "dashboard/src/hooks/usePanelActions.ts": "unknown",
+    "dashboard/src/hooks/usePanelActions.ts": "usecase",
     "dashboard/src/hooks/useRepoSelection.ts": "usecase",
     "dashboard/src/hooks/useSearchUI.ts": "usecase",
     "dashboard/src/hooks/useWebSocketConnection.ts": "usecase",
@@ -142,58 +180,14 @@
     "src/viz/viz-scanner.ts": "usecase",
     "src/viz/viz-server.test.ts": "usecase",
     "src/viz/viz-server.ts": "usecase",
-    "temp-test-cs-1778165460476/classes.cs": "unknown",
-    "temp-test-cs-1778165460476/interfaces.cs": "unknown",
-    "temp-test-cs-1778165460476/withTypes.cs": "unknown",
-    "temp-test-cs-1778165460476/withUsings.cs": "unknown",
-    "temp-test-1778165467763/Calculator.cs": "unknown",
-    "temp-test-1778165467763/Component.tsx": "unknown",
-    "temp-test-1778165467763/bad.ts": "unknown",
-    "temp-test-1778165467763/invalid.ts": "unknown",
-    "temp-test-1778165467763/test.ts": "unknown",
-    "temp-test-cs-1778165511291/classes.cs": "unknown",
-    "temp-test-cs-1778165511291/withTypes.cs": "unknown",
-    "temp-test-cs-1778165511291/withUsings.cs": "unknown",
-    "temp-test-1778165516967/BadCode.cs": "unknown",
-    "temp-test-1778165516967/Calculator.cs": "unknown",
-    "temp-test-1778165516967/Component.tsx": "unknown",
-    "temp-test-1778165516967/bad.ts": "unknown",
-    "temp-test-1778165516967/invalid.ts": "unknown",
-    "temp-test-1778165516967/test.ts": "unknown",
-    "temp-test-cs-1778165511291/complexity.cs": "unknown",
-    "temp-test-cs-1778165511291/coupling.cs": "unknown",
-    "temp-test-cs-1778165511291/duplicate.cs": "unknown",
-    "temp-test-cs-1778165511291/emptycatch.cs": "unknown",
-    "temp-test-cs-1778165511291/enums.cs": "unknown",
-    "temp-test-cs-1778165511291/fixme.cs": "unknown",
-    "temp-test-cs-1778165511291/god.cs": "unknown",
-    "temp-test-cs-1778165511291/hack.cs": "unknown",
-    "temp-test-cs-1778165511291/interfaces.cs": "unknown",
-    "temp-test-cs-1778165511291/lines.cs": "unknown",
-    "temp-test-cs-1778165511291/longmethod.cs": "unknown",
-    "temp-test-cs-1778165511291/loose.cs": "unknown",
-    "temp-test-cs-1778165511291/magic.cs": "unknown",
-    "temp-test-cs-1778165511291/methods.cs": "unknown",
-    "temp-test-cs-1778165511291/normal.cs": "unknown",
-    "temp-test-cs-1778165511291/notimpl.cs": "unknown",
-    "temp-test-cs-1778165511291/partial.cs": "unknown",
-    "temp-test-cs-1778165511291/records.cs": "unknown",
-    "temp-test-cs-1778165511291/shortmethod.cs": "unknown",
-    "temp-test-cs-1778165511291/structs.cs": "unknown",
-    "temp-test-cs-1778165511291/todo.cs": "unknown",
-    "temp-test-cs-1778165511291/usings.cs": "unknown",
-    "temp-test-cs-1778165511291/validcatch.cs": "unknown",
-    "temp-test-cs-1778165511291/zeroone.cs": "unknown",
-    "temp-repo-scan2-1778170411488/c.ts": "unknown",
-    "temp-test-1778174319574/Calculator.cs": "unknown",
-    "temp-test-1778174319574/Component.tsx": "usecase",
-    "temp-test-1778174319574/bad.ts": "usecase",
-    "temp-test-1778174319574/invalid.ts": "usecase",
-    "temp-test-1778174319574/test.ts": "usecase",
-    "temp-test-cs-1778174318831/withUsings.cs": "unknown",
-    "dashboard/src/components/arch-layers.test.ts": "application",
-    "dashboard/src/hooks/useArchConfig.ts": "unknown",
-    "dashboard/src/hooks/useGraphData.ts": "unknown"
+    "dashboard/src/components/arch-layers.test.ts": "interface",
+    "dashboard/src/hooks/useArchConfig.ts": "usecase",
+    "dashboard/src/hooks/useGraphData.ts": "usecase",
+    "temp-test-cs-1778269061614/withUsings.cs": "unknown",
+    "dashboard/src/components/arch-rendering.ts": "interface",
+    "dashboard/src/hooks/useAppMetrics.ts": "usecase",
+    "dashboard/dashboard/src/components/ErrorBoundary.tsx": "interface",
+    "dashboard/src/components/ErrorBoundary.tsx": "interface"
   },
   "overrides": {}
 }

@@ -253,6 +253,66 @@ describe('getLayerBands', () => {
   });
 });
 
+describe('detectArchViolations — explicit connections', () => {
+  const layerOrder = ['a', 'b', 'c'];
+
+  it('treats only explicit connections as allowed (no implicit transitivity)', () => {
+    const layerMap = new Map([['file-a.ts', 'a'], ['file-b.ts', 'b'], ['file-c.ts', 'c']]);
+    const connections = [{ from: 'a', to: 'c' }];
+    // a→c is allowed; a→b is NOT (no implicit transitivity)
+    const allowed = detectArchViolations([edge('file-a.ts', 'file-c.ts')], layerMap, layerOrder, connections);
+    const blocked = detectArchViolations([edge('file-a.ts', 'file-b.ts')], layerMap, layerOrder, connections);
+    expect(allowed.size).toBe(0);
+    expect(blocked.size).toBeGreaterThan(0);
+  });
+
+  it('falls back to order-derived transitive when connections is undefined', () => {
+    const layerMap = new Map([['file-a.ts', 'a'], ['file-b.ts', 'b']]);
+    // a → b is allowed by order (a is outer, b is inner)
+    const violations = detectArchViolations([edge('file-a.ts', 'file-b.ts')], layerMap, layerOrder);
+    expect(violations.size).toBe(0);
+  });
+
+  it('falls back to order-derived when connections is empty array', () => {
+    const layerMap = new Map([['file-a.ts', 'a'], ['file-b.ts', 'b']]);
+    const violations = detectArchViolations([edge('file-a.ts', 'file-b.ts')], layerMap, layerOrder, []);
+    expect(violations.size).toBe(0);
+  });
+
+  it('always allows same-layer dependencies regardless of connections', () => {
+    const layerMap = new Map([['x.ts', 'a'], ['y.ts', 'a']]);
+    const violations = detectArchViolations([edge('x.ts', 'y.ts')], layerMap, layerOrder, []);
+    expect(violations.size).toBe(0);
+  });
+});
+
+describe('computeArchLayerPositions — grid wrap', () => {
+  it('keeps small layers (≤4) as a 1-wide stack', () => {
+    const nodes = [
+      node('src/domain/a.ts'), node('src/domain/b.ts'),
+      node('src/domain/c.ts'), node('src/domain/d.ts'),
+    ];
+    const positions = computeArchLayerPositions(nodes);
+    const xs = new Set(nodes.map(n => positions.get(n.id)!.x));
+    expect(xs.size).toBe(1); // all share the same X
+  });
+
+  it('wraps large layers (>4) into multiple columns within the same container', () => {
+    const nodes = Array.from({ length: 9 }, (_, i) => node(`src/domain/n${i}.ts`));
+    const positions = computeArchLayerPositions(nodes);
+    const xs = new Set(nodes.map(n => positions.get(n.id)!.x));
+    expect(xs.size).toBeGreaterThan(1);
+    expect(xs.size).toBeLessThanOrEqual(4); // capped at MAX_INNER_COLS
+  });
+
+  it('caps inner columns at 4 even for very large layers', () => {
+    const nodes = Array.from({ length: 40 }, (_, i) => node(`src/domain/n${i}.ts`));
+    const positions = computeArchLayerPositions(nodes);
+    const xs = new Set(nodes.map(n => positions.get(n.id)!.x));
+    expect(xs.size).toBeLessThanOrEqual(4);
+  });
+});
+
 describe('getViolationSourceNodes', () => {
   it('returns empty set when no violations', () => {
     const sources = getViolationSourceNodes(new Map());

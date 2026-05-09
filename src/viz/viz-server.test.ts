@@ -295,9 +295,15 @@ describe('VizServer', () => {
 
   describe('scan', () => {
     it('completes with 0 files', async () => {
-      vizServer = new VizServer(cache, analyzer);
-      await vizServer.scan();
-      expect((vizServer as any).scanning).toBe(false);
+      const tempDir = path.join(__dirname, '../../temp-viz-scan-' + Date.now());
+      fs.mkdirSync(tempDir, { recursive: true });
+      try {
+        vizServer = new VizServer(cache, analyzer, tempDir, tempDir, config);
+        await vizServer.scan();
+        expect((vizServer as any).scanning).toBe(false);
+      } finally {
+        if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+      }
     });
   });
 });
