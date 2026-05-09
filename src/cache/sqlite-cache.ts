@@ -165,6 +165,13 @@ export class SqliteCache {
       .map(r => ({ nodeId: r.node_id, x: r.x, y: r.y }));
   }
 
+  deleteFile(filePath: string, repoRoot: string): boolean {
+    const deleted = this.db.prepare('DELETE FROM analyses WHERE repo = ? AND path = ?').run(repoRoot, filePath).changes;
+    this.db.prepare('DELETE FROM rating_history WHERE repo = ? AND path = ?').run(repoRoot, filePath);
+    this.db.prepare('DELETE FROM node_positions WHERE repo = ? AND node_id = ?').run(repoRoot, filePath);
+    return deleted > 0;
+  }
+
   clearRepo(repo: string): number {
     const deletedAnalyses = this.db.prepare('DELETE FROM analyses WHERE repo = ?').run(repo).changes;
     this.db.prepare('DELETE FROM rating_history WHERE repo = ?').run(repo);

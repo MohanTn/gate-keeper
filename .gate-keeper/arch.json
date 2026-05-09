@@ -120,7 +120,7 @@
     "dashboard/src/components/ViolationsPanel.test.tsx": "interface",
     "dashboard/src/components/ViolationsPanel.tsx": "interface",
     "dashboard/src/components/VisGraphView.test.tsx": "interface",
-    "dashboard/src/components/VisGraphView.tsx": "unknown",
+    "dashboard/src/components/VisGraphView.tsx": "interface",
     "dashboard/src/components/arch-layers.ts": "interface",
     "dashboard/src/components/graph-utils.test.ts": "interface",
     "dashboard/src/components/graph-utils.ts": "interface",
@@ -187,7 +187,17 @@
     "dashboard/src/components/arch-rendering.ts": "interface",
     "dashboard/src/hooks/useAppMetrics.ts": "usecase",
     "dashboard/dashboard/src/components/ErrorBoundary.tsx": "interface",
-    "dashboard/src/components/ErrorBoundary.tsx": "interface"
+    "dashboard/src/components/ErrorBoundary.tsx": "interface",
+    "src/mcp/handlers/types.ts": "interface",
+    "src/mcp/handlers/shared.ts": "interface",
+    "src/mcp/handlers/analysis.ts": "interface",
+    "src/mcp/handlers/context.ts": "interface",
+    "src/mcp/handlers/improvement.ts": "interface",
+    "src/mcp/handlers/index.ts": "application",
+    "src/mcp/handlers/graph.ts": "interface",
+    "src/mcp/handlers/impact.ts": "interface",
+    "src/mcp/handlers/impact-format.ts": "interface",
+    "src/mcp/handlers/impact-format.test.ts": "interface"
   },
   "overrides": {}
 }

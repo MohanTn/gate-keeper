@@ -36,11 +36,29 @@ export async function scan(deps: ScannerDeps): Promise<void> {
   const roots = new Set<string>([deps.workDir, ...deps.cache.getRepos(), ...registeredPaths]);
   const cachedPaths = new Set<string>(deps.cache.getAll().map(a => a.path));
 
+  // Prune stale cache entries (files deleted since last scan)
+  const allAnalyses = deps.cache.getAll();
+  const staleLookup = new Map<string, string>();
+  for (const a of allAnalyses) {
+    if (a.repoRoot) staleLookup.set(a.path, a.repoRoot);
+  }
+  const diskFiles = new Set<string>();
+  for (const root of roots) {
+    for (const fp of walkFiles(root)) diskFiles.add(fp);
+  }
+  for (const [stalePath, repoRoot] of staleLookup) {
+    if (!diskFiles.has(stalePath)) {
+      deps.cache.deleteFile(stalePath, repoRoot);
+      deps.graphFor(repoRoot).remove(stalePath);
+    }
+  }
+  const activePaths = new Set<string>(deps.cache.getAll().map(a => a.path));
+
   const seen = new Set<string>();
   const toScan: Array<{ filePath: string; root: string }> = [];
   for (const root of roots) {
     for (const filePath of walkFiles(root)) {
-      if (!seen.has(filePath) && deps.analyzer.isSupportedFile(filePath) && !cachedPaths.has(filePath)) {
+      if (!seen.has(filePath) && deps.analyzer.isSupportedFile(filePath) && !activePaths.has(filePath)) {
         const ext = path.extname(filePath);
         if (shouldExcludeFile(filePath, ext, deps.config.scanExcludePatterns)) continue;
         seen.add(filePath);
@@ -138,7 +156,25 @@ export async function scanRepo(deps: ScannerDeps, repoRoot: string, force = fals
   if (deps.getScanning()) return;
   deps.setScanning(true);
 
-  const cachedPaths = force ? new Set<string>() : new Set(deps.cache.getAll(repoRoot).map(a => a.path));
+  let cachedPaths = force ? new Set<string>() : new Set(deps.cache.getAll(repoRoot).map(a => a.path));
+
+  // Prune stale cache entries (files deleted since last scan)
+  if (!force) {
+    const allAnalyses = deps.cache.getAll(repoRoot);
+    const staleLookup = new Map<string, string>();
+    for (const a of allAnalyses) {
+      if (a.repoRoot) staleLookup.set(a.path, a.repoRoot);
+    }
+    const diskFiles = new Set(walkFiles(repoRoot));
+    for (const [stalePath, staleRepo] of staleLookup) {
+      if (!diskFiles.has(stalePath)) {
+        deps.cache.deleteFile(stalePath, staleRepo);
+        deps.graphFor(staleRepo).remove(stalePath);
+      }
+    }
+    cachedPaths = new Set(deps.cache.getAll(repoRoot).map(a => a.path));
+  }
+
   const toScan: string[] = [];
   for (const filePath of walkFiles(repoRoot)) {
     if (deps.analyzer.isSupportedFile(filePath) && !cachedPaths.has(filePath)) {
