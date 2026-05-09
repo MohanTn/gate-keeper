@@ -18,6 +18,14 @@ import { VizServer } from './viz/viz-server';
 import { Config, DaemonRequest, RepoMetadata } from './types';
 import { mergeFileLayer, getEffectiveLayer, readArchConfig, DEFAULT_LAYERS } from './arch/arch-config-manager';
 
+declare global {
+  namespace NodeJS {
+    interface Process {
+      _gateKeeperSignalsRegistered?: boolean;
+    }
+  }
+}
+
 export const IPC_PORT = 5379;
 export const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
 export const PID_FILE = path.join(GK_DIR, 'daemon.pid');
@@ -78,7 +86,7 @@ export function findGitRoot(dir: string): string {
   return (result.status === 0 && result.stdout.trim()) ? result.stdout.trim() : dir;
 }
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const noScan = args.includes('--no-scan');
 
@@ -202,10 +210,10 @@ async function main(): Promise<void> {
   });
 
   // Only register signal handlers once per process
-  if ((process as any)._gateKeeperSignalsRegistered !== true) {
+  if (process._gateKeeperSignalsRegistered !== true) {
     process.on('SIGTERM', () => shutdown(cache));
     process.on('SIGINT', () => shutdown(cache));
-    (process as any)._gateKeeperSignalsRegistered = true;
+    process._gateKeeperSignalsRegistered = true;
   }
 
   console.error(`[gate-keeper] Daemon started (PID ${process.pid})`);

@@ -20,7 +20,5 @@ module.exports = {
     }],
   },
   coverageReporters: ['text', 'text-summary', 'lcov', 'cobertura'],
-  moduleNameMapper: {
-    '^react-force-graph-2d$': '<rootDir>/src/__mocks__/react-force-graph-2d.js',
-  },
+  moduleNameMapper: {},
 };

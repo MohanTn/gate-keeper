@@ -1,5 +1,6 @@
 import { GraphData, GraphNode, GraphEdge } from '../types';
 import { ThemeTokens, darkTokens } from '../ThemeContext';
+import { isTestFile } from './arch-rendering';
 
 // Default T for backward compat — components should pass theme explicitly
 export const T = darkTokens;
@@ -39,6 +40,7 @@ export function buildVisNodes(
     pinned: Map<string, { x: number; y: number }>,
     treePositions: Map<string, { x: number; y: number }>,
     theme: ThemeTokens = T,
+    archMode: boolean = false,
 ): any[] {
     // For large graphs without layout positions, use a grid scatter
     const needsScatter = treePositions.size === 0 && nodes.length > 200;
@@ -50,13 +52,16 @@ export function buildVisNodes(
             ? { x: (i % cols) * 220, y: Math.floor(i / cols) * 100 }
             : { x: 0, y: 0 };
         const pos = pinned.get(node.id) ?? treePositions.get(node.id) ?? scatterPos;
+        const isTest = archMode && isTestFile(node.id);
+        const label = isTest ? `[test] ${node.label}` : node.label;
         return {
             id: node.id,
-            label: node.label,
+            label,
             x: pos.x, y: pos.y,
             title: buildTooltip(node),
             shape: 'box',
             color: makeNodeColor(color, theme),
+            opacity: isTest ? 0.7 : 1,
             font: { color: theme.text, size: 15, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
             borderWidth: 2,
             borderWidthSelected: 3,
@@ -128,24 +133,44 @@ export function computeHierarchicalPositions(
         roots.push(sorted[0]);
     }
 
-    const layer = new Map<string, number>();
-    const queue: string[] = [];
-    for (const r of roots) { layer.set(r, 0); queue.push(r); }
+    // Cycle-safe layer assignment via iterative DFS topological sort.
+    // The old BFS updated layer values upward on every traversal, causing an infinite
+    // loop when bidirectional import cycles exist. Iterative DFS detects back-edges
+    // (the 'visiting' state) and skips them, guaranteeing O(V+E) termination.
+    const visitState = new Map<string, 'unvisited' | 'visiting' | 'done'>();
+    const topoOrder: string[] = [];
+    for (const id of nodeIds) visitState.set(id, 'unvisited');
 
-    while (queue.length > 0) {
-        const id = queue.shift()!;
-        const d = layer.get(id)!;
-        for (const child of childrenOf.get(id) ?? []) {
-            const next = d + 1;
-            if (!layer.has(child) || layer.get(child)! < next) {
-                layer.set(child, next);
-                queue.push(child);
+    for (const startId of nodeIds) {
+        if (visitState.get(startId) !== 'unvisited') continue;
+        const stack: Array<{ id: string; iter: IterableIterator<string> }> = [
+            { id: startId, iter: (childrenOf.get(startId) ?? new Set()).values() },
+        ];
+        visitState.set(startId, 'visiting');
+        while (stack.length > 0) {
+            const frame = stack[stack.length - 1];
+            const { value: child, done } = frame.iter.next();
+            if (done) {
+                visitState.set(frame.id, 'done');
+                topoOrder.push(frame.id);
+                stack.pop();
+            } else if (visitState.get(child) === 'unvisited') {
+                visitState.set(child, 'visiting');
+                stack.push({ id: child, iter: (childrenOf.get(child) ?? new Set()).values() });
             }
+            // 'visiting' = back-edge (cycle), 'done' = cross/forward-edge — both skipped
         }
     }
+    topoOrder.reverse(); // sources first: roots before their dependents
 
-    for (const id of nodeIds) {
-        if (!layer.has(id)) layer.set(id, 0);
+    // Single-pass longest-path propagation in topological order — O(V+E), cycle-safe
+    const layer = new Map<string, number>();
+    for (const id of topoOrder) layer.set(id, 0);
+    for (const id of topoOrder) {
+        const d = layer.get(id)!;
+        for (const child of childrenOf.get(id) ?? []) {
+            if ((layer.get(child) ?? 0) < d + 1) layer.set(child, d + 1);
+        }
     }
 
     const maxLayer = Math.max(...layer.values(), 0);

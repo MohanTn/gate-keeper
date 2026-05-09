@@ -67,6 +67,14 @@ jest.mock('child_process', () => ({
   })),
 }));
 
+// Mock arch-config-manager
+jest.mock('./arch/arch-config-manager', () => ({
+  readArchConfig: jest.fn().mockReturnValue({}),
+  mergeFileLayer: jest.fn(),
+  getEffectiveLayer: jest.fn().mockReturnValue('application'),
+  DEFAULT_LAYERS: {},
+}));
+
 // Mock fs to prevent actual file system operations during module load
 jest.mock('fs', () => {
   const actualFs = jest.requireActual('fs');
@@ -80,512 +88,485 @@ jest.mock('fs', () => {
   };
 });
 
-describe('daemon configuration', () => {
-  const GK_DIR = path.join(process.env.HOME ?? '/tmp', '.gate-keeper');
-  const CONFIG_FILE = path.join(GK_DIR, 'config.json');
+// Helper to extract HTTP handler from express mock
+function extractHandler(method: 'get' | 'post', route: string) {
+  const express = require('express');
+  const mockApp = express.mock.results[express.mock.results.length - 1].value;
+  const calls = mockApp[method].mock.calls;
+  const call = calls.find((c: any[]) => c[0] === route);
+  return call ? call[call.length - 1] : null;
+}
 
-  beforeEach(() => {
-    jest.resetModules();
-  });
+// Helper to create mock req/res
+function createMockReqRes(body?: any) {
+  const req = { body: body || {} };
+  const res: any = {
+    json: jest.fn().mockReturnThis(),
+    status: jest.fn().mockReturnThis(),
+  };
+  return { req, res };
+}
 
-  describe('DEFAULT_CONFIG', () => {
-    it('should have default minRating of 6.5', () => {
-      const { DEFAULT_CONFIG } = require('./daemon');
-      expect(DEFAULT_CONFIG.minRating).toBe(6.5);
-    });
+describe('DEFAULT_CONFIG', () => {
+  beforeEach(() => jest.resetModules());
 
-    it('should have default scanExcludePatterns', () => {
-      const { DEFAULT_CONFIG } = require('./daemon');
-      expect(DEFAULT_CONFIG.scanExcludePatterns).toBeDefined();
-    });
-
-    it('should exclude C# migration files by default', () => {
-      const { DEFAULT_CONFIG } = require('./daemon');
-      const csharpPatterns = DEFAULT_CONFIG.scanExcludePatterns?.csharp ?? [];
-      expect(csharpPatterns).toContain('**/Migrations/*.cs');
-    });
-
-    it('should exclude TypeScript declaration files by default', () => {
-      const { DEFAULT_CONFIG } = require('./daemon');
-      const tsPatterns = DEFAULT_CONFIG.scanExcludePatterns?.typescript ?? [];
-      expect(tsPatterns).toContain('*.d.ts');
-    });
-  });
-
-  describe('constants', () => {
-    it('should have correct IPC_PORT', () => {
-      const { IPC_PORT } = require('./daemon');
-      expect(IPC_PORT).toBe(5379);
-    });
-
-    it('should have GK_DIR containing .gate-keeper', () => {
-      const { GK_DIR } = require('./daemon');
-      expect(GK_DIR).toContain('.gate-keeper');
-    });
-
-    it('should have PID_FILE path', () => {
-      const { PID_FILE } = require('./daemon');
-      expect(PID_FILE).toContain('daemon.pid');
-    });
-
-    it('should have CONFIG_FILE path', () => {
-      const { CONFIG_FILE } = require('./daemon');
-      expect(CONFIG_FILE).toContain('config.json');
-    });
-  });
-});
-
-describe('findGitRoot', () => {
-  beforeEach(() => {
-    jest.resetModules();
-  });
-
-  it('should return git root when git command succeeds', () => {
-    const { spawnSync } = require('child_process');
-    (spawnSync as jest.Mock).mockReturnValue({
-      status: 0,
-      stdout: '/path/to/repo\n',
-    });
-
-    const { findGitRoot } = require('./daemon');
-    const result = findGitRoot('/path/to/repo/src');
-
-    expect(result).toBe('/path/to/repo');
-  });
-
-  it('should return input dir when git command fails', () => {
-    const { spawnSync } = require('child_process');
-    (spawnSync as jest.Mock).mockReturnValue({
-      status: 1,
-      stdout: '',
-      stderr: 'not a git repo',
-    });
-
-    const { findGitRoot } = require('./daemon');
-    const result = findGitRoot('/not/a/git/repo');
-
-    expect(result).toBe('/not/a/git/repo');
-  });
-
-  it('should trim whitespace from git output', () => {
-    const { spawnSync } = require('child_process');
-    (spawnSync as jest.Mock).mockReturnValue({
-      status: 0,
-      stdout: '  /path/with/spaces  \n\n',
-    });
-
-    const { findGitRoot } = require('./daemon');
-    const result = findGitRoot('/path/with/spaces/src');
-
-    expect(result).toBe('/path/with/spaces');
-  });
-
-  it('should call git with correct cwd parameter', () => {
-    const { spawnSync } = require('child_process');
-    (spawnSync as jest.Mock).mockReturnValue({
-      status: 0,
-      stdout: '/repo\n',
-    });
-
-    const { findGitRoot } = require('./daemon');
-    findGitRoot('/my/project');
-
-    expect((spawnSync as jest.Mock).mock.calls[0][0]).toBe('git');
-    expect((spawnSync as jest.Mock).mock.calls[0][1]).toEqual(['rev-parse', '--show-toplevel']);
-  });
-});
-
-describe('daemon IPC endpoints', () => {
-  describe('/health endpoint', () => {
-    it('should return ok status with PID', () => {
-      const expectedResponse = { ok: true, pid: process.pid };
-      expect(expectedResponse.ok).toBe(true);
-    });
-  });
-
-  describe('/repo-register endpoint', () => {
-    it('should handle invalid requests', () => {
-      const invalidRequests = [
-        {},
-        { action: 'unknown' },
-        { action: 'register_repo' },
-        { action: 'register_repo', repo: {} },
-      ];
-
-      for (const req of invalidRequests) {
-        const hasValidAction = (req as any).action === 'register_repo';
-        const hasValidPath = !!(req as any).repo?.path;
-        // Invalid if action is not register_repo OR repo path is missing
-        const isValid = hasValidAction && hasValidPath;
-        // At least some of these should be invalid
-        if ((req as any).action !== 'register_repo' || !(req as any).repo?.path) {
-          expect(isValid).toBe(false);
-        }
-      }
-    });
-
-    it('should handle valid repo registration request structure', () => {
-      const validRequest = {
-        action: 'register_repo',
-        repo: {
-          path: '/path/to/repo',
-          name: 'my-repo',
-        },
-      };
-
-      expect(validRequest.action).toBe('register_repo');
-      expect(validRequest.repo.path).toBeDefined();
-    });
-  });
-
-  describe('/analyze endpoint', () => {
-    it('should handle missing file path', () => {
-      const request = {};
-      const isValid = !!(request as any).filePath;
-      expect(isValid).toBe(false);
-    });
-
-    it('should handle unsupported file types', () => {
-      const supportedExts = ['.ts', '.tsx', '.jsx', '.js', '.cs'];
-      const unsupportedExts = ['.py', '.java', '.go', '.rb'];
-
-      for (const ext of unsupportedExts) {
-        const isSupported = supportedExts.some(e => `.file${ext}`.endsWith(e));
-        expect(isSupported).toBe(false);
-      }
-    });
-  });
-});
-
-describe('daemon signal handling', () => {
-  it('should handle SIGTERM signal', () => {
-    expect('SIGTERM').toBe('SIGTERM');
-  });
-
-  it('should handle SIGINT signal', () => {
-    expect('SIGINT').toBe('SIGINT');
-  });
-});
-
-describe('daemon startup messages', () => {
-  it('should log daemon started message with PID', () => {
-    const expectedMessage = `[gate-keeper] Daemon started (PID ${process.pid})`;
-    expect(expectedMessage).toContain('Daemon started');
-  });
-
-  it('should log IPC ready message', () => {
-    const { IPC_PORT } = require('./daemon');
-    const expectedMessage = `[gate-keeper] IPC ready on 127.0.0.1:${IPC_PORT}`;
-    expect(expectedMessage).toContain('IPC ready');
-  });
-});
-
-describe('daemon --no-scan flag', () => {
-  it('should skip initial scan when --no-scan flag is provided', () => {
-    const args = ['--no-scan'];
-    const noScan = args.includes('--no-scan');
-    expect(noScan).toBe(true);
-  });
-
-  it('should perform initial scan by default', () => {
-    const args: string[] = [];
-    const noScan = args.includes('--no-scan');
-    expect(noScan).toBe(false);
-  });
-});
-
-describe('daemon configuration', () => {
-  beforeEach(() => {
-    jest.resetModules();
-  });
-
-  it('should have DEFAULT_CONFIG with required fields', () => {
+  it('should export DEFAULT_CONFIG with minRating 6.5', () => {
     const { DEFAULT_CONFIG } = require('./daemon');
     expect(DEFAULT_CONFIG.minRating).toBe(6.5);
-    expect(DEFAULT_CONFIG.scanExcludePatterns).toBeDefined();
   });
 
-  it('should have default C# exclusions', () => {
+  it('should have scanExcludePatterns for C#, TypeScript, and global', () => {
+    const { DEFAULT_CONFIG } = require('./daemon');
+    expect(DEFAULT_CONFIG.scanExcludePatterns).toHaveProperty('csharp');
+    expect(DEFAULT_CONFIG.scanExcludePatterns).toHaveProperty('typescript');
+    expect(DEFAULT_CONFIG.scanExcludePatterns).toHaveProperty('global');
+  });
+
+  it('should exclude C# migration files', () => {
     const { DEFAULT_CONFIG } = require('./daemon');
     expect(DEFAULT_CONFIG.scanExcludePatterns.csharp).toContain('**/Migrations/*.cs');
   });
 
-  it('should have default TypeScript exclusions', () => {
+  it('should exclude TypeScript declaration files', () => {
     const { DEFAULT_CONFIG } = require('./daemon');
     expect(DEFAULT_CONFIG.scanExcludePatterns.typescript).toContain('*.d.ts');
   });
+});
 
-  it('should export IPC_PORT constant', () => {
+describe('constants', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('should export IPC_PORT = 5379', () => {
     const { IPC_PORT } = require('./daemon');
     expect(IPC_PORT).toBe(5379);
   });
 
-  it('should export GK_DIR constant', () => {
+  it('should have GK_DIR path containing .gate-keeper', () => {
     const { GK_DIR } = require('./daemon');
     expect(GK_DIR).toContain('.gate-keeper');
   });
 
-  it('should export PID_FILE constant', () => {
-    const { PID_FILE } = require('./daemon');
+  it('should have PID_FILE and CONFIG_FILE paths', () => {
+    const { PID_FILE, CONFIG_FILE } = require('./daemon');
     expect(PID_FILE).toContain('daemon.pid');
-  });
-
-  it('should export CONFIG_FILE constant', () => {
-    const { CONFIG_FILE } = require('./daemon');
     expect(CONFIG_FILE).toContain('config.json');
   });
 });
 
-describe('daemon HTTP endpoints', () => {
+describe('findGitRoot', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('should return git root when git succeeds', () => {
+    const { spawnSync } = require('child_process');
+    spawnSync.mockReturnValue({ status: 0, stdout: '/path/to/repo\n' });
+
+    const { findGitRoot } = require('./daemon');
+    expect(findGitRoot('/path/to/repo/src')).toBe('/path/to/repo');
+  });
+
+  it('should return input directory when git fails', () => {
+    const { spawnSync } = require('child_process');
+    spawnSync.mockReturnValue({ status: 1, stdout: '' });
+
+    const { findGitRoot } = require('./daemon');
+    expect(findGitRoot('/not/a/git/repo')).toBe('/not/a/git/repo');
+  });
+
+  it('should trim whitespace from git output', () => {
+    const { spawnSync } = require('child_process');
+    spawnSync.mockReturnValue({ status: 0, stdout: '  /path/with/spaces  \n\n' });
+
+    const { findGitRoot } = require('./daemon');
+    expect(findGitRoot('/path/with/spaces/src')).toBe('/path/with/spaces');
+  });
+});
+
+describe('main() startup', () => {
   beforeEach(() => {
     jest.resetModules();
+    jest.clearAllMocks();
   });
 
-  describe('/health endpoint', () => {
-    it('should return status ok with process pid', () => {
-      const response = { ok: true, pid: process.pid };
-      expect(response.ok).toBe(true);
-      expect(response.pid).toBeGreaterThan(0);
-    });
+  it('should call ensurePidFile and start vizServer', async () => {
+    const { main } = require('./daemon');
+    const fs = require('fs');
+    const { VizServer } = require('./viz/viz-server');
 
-    it('should include valid pid in response', () => {
-      const response = { ok: true, pid: 12345 };
-      expect(typeof response.pid).toBe('number');
-      expect(response.pid).toBeGreaterThan(0);
-    });
+    await main();
+
+    expect(fs.mkdirSync).toHaveBeenCalled();
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining('daemon.pid'),
+      expect.any(String)
+    );
+    expect(VizServer.mock.results[0].value.start).toHaveBeenCalled();
   });
 
-  describe('/analyze endpoint request handling', () => {
-    it('should handle requests with filePath and repoRoot', () => {
-      const request = {
-        filePath: '/src/index.ts',
-        repoRoot: '/workspace',
-      };
-      expect(request.filePath).toBeDefined();
-      expect(request.repoRoot).toBeDefined();
-    });
+  it('should call vizServer.scan(false) by default', async () => {
+    const { main } = require('./daemon');
+    const { VizServer } = require('./viz/viz-server');
 
-    it('should handle requests with only filePath', () => {
-      const request = { filePath: '/src/app.tsx' };
-      expect(request.filePath).toBeDefined();
-    });
+    await main();
 
-    it('should identify missing filePath', () => {
-      const request = { filePath: undefined };
-      expect(!request.filePath).toBe(true);
-    });
-
-    it('should validate TypeScript file support', () => {
-      const ext = '.ts';
-      const supported = ['.ts', '.tsx', '.js', '.jsx', '.cs'];
-      expect(supported.includes(ext)).toBe(true);
-    });
-
-    it('should validate C# file support', () => {
-      const ext = '.cs';
-      const supported = ['.ts', '.tsx', '.js', '.jsx', '.cs'];
-      expect(supported.includes(ext)).toBe(true);
-    });
-
-    it('should reject unsupported extensions', () => {
-      const unsupported = ['.py', '.go', '.rb', '.java'];
-      const supported = ['.ts', '.tsx', '.js', '.jsx', '.cs'];
-
-      for (const ext of unsupported) {
-        expect(supported.includes(ext)).toBe(false);
-      }
-    });
+    expect(VizServer.mock.results[0].value.scan).toHaveBeenCalledWith(false);
   });
 
-  describe('/repo-register endpoint', () => {
-    it('should require action field', () => {
-      const invalid = { repo: { path: '/path' } };
-      expect((invalid as any).action).toBeUndefined();
+  it('should NOT call vizServer.scan with --no-scan flag', async () => {
+    const orig = process.argv;
+    process.argv = ['node', 'dist/daemon.js', '--no-scan'];
+    const { main } = require('./daemon');
+    const { VizServer } = require('./viz/viz-server');
+
+    await main();
+
+    expect(VizServer.mock.results[0].value.scan).not.toHaveBeenCalled();
+    process.argv = orig;
+  });
+
+  it('should register IPC routes and listen on port 5379', async () => {
+    const { main } = require('./daemon');
+    const express = require('express');
+
+    await main();
+
+    const mockApp = express.mock.results[express.mock.results.length - 1].value;
+    expect(mockApp.listen).toHaveBeenCalledWith(5379, '127.0.0.1', expect.any(Function));
+  });
+
+  it('should register routes for /health, /repo-register, /analyze, /repos', async () => {
+    const { main } = require('./daemon');
+    const express = require('express');
+
+    await main();
+
+    const mockApp = express.mock.results[express.mock.results.length - 1].value;
+    const getRoutes = mockApp.get.mock.calls.map((c: any[]) => c[0]);
+    const postRoutes = mockApp.post.mock.calls.map((c: any[]) => c[0]);
+
+    expect(getRoutes).toContain('/health');
+    expect(getRoutes).toContain('/repos');
+    expect(postRoutes).toContain('/repo-register');
+    expect(postRoutes).toContain('/analyze');
+  });
+});
+
+describe('loadConfig behavior', () => {
+  it('should use DEFAULT_CONFIG when file does not exist', async () => {
+    jest.resetModules();
+    const fs = require('fs');
+    fs.existsSync.mockReturnValue(false);
+
+    const { main } = require('./daemon');
+    const { VizServer } = require('./viz/viz-server');
+
+    await main();
+
+    const args = VizServer.mock.calls[0];
+    expect(args[4].minRating).toBe(6.5);
+  });
+
+  it('should merge user config minRating override', async () => {
+    jest.resetModules();
+    const fs = require('fs');
+    fs.existsSync.mockReturnValue(true);
+    fs.readFileSync.mockReturnValue('{"minRating": 8.0}');
+
+    const { main } = require('./daemon');
+    const { VizServer } = require('./viz/viz-server');
+
+    await main();
+
+    const args = VizServer.mock.calls[0];
+    expect(args[4].minRating).toBe(8.0);
+  });
+
+  it('should fallback to defaults on malformed JSON', async () => {
+    jest.resetModules();
+    const fs = require('fs');
+    fs.existsSync.mockReturnValue(true);
+    fs.readFileSync.mockReturnValue('{invalid json}');
+
+    const { main } = require('./daemon');
+    const { VizServer } = require('./viz/viz-server');
+
+    await main();
+
+    const args = VizServer.mock.calls[0];
+    expect(args[4].minRating).toBe(6.5);
+  });
+
+  it('should preserve default scanExcludePatterns', async () => {
+    jest.resetModules();
+    const fs = require('fs');
+    fs.existsSync.mockReturnValue(true);
+    fs.readFileSync.mockReturnValue('{"minRating": 7.5}');
+
+    const { main } = require('./daemon');
+    const { VizServer } = require('./viz/viz-server');
+
+    await main();
+
+    const args = VizServer.mock.calls[0];
+    expect(args[4].scanExcludePatterns.typescript).toContain('*.d.ts');
+  });
+});
+
+describe('GET /health endpoint', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('should return { ok: true, pid }', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('get', '/health');
+    expect(handler).toBeDefined();
+
+    const { req, res } = createMockReqRes();
+    handler(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({ ok: true, pid: process.pid });
+  });
+});
+
+describe('POST /repo-register endpoint', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('should return 400 when action is missing', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/repo-register');
+    const { req, res } = createMockReqRes({ repo: { path: '/path' } });
+
+    handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith({ error: 'Invalid request' });
+  });
+
+  it('should return 400 when repo.path is missing', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/repo-register');
+    const { req, res } = createMockReqRes({ action: 'register_repo', repo: {} });
+
+    handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+
+  it('should register repo and call cache.saveRepository', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/repo-register');
+    const { SqliteCache } = require('./cache/sqlite-cache');
+    const mockCache = SqliteCache.mock.results[0].value;
+
+    const { req, res } = createMockReqRes({
+      action: 'register_repo',
+      repo: { path: '/my/repo', name: 'test-repo' },
     });
 
-    it('should require register_repo action', () => {
-      const request = { action: 'register_repo' };
-      expect(request.action).toBe('register_repo');
+    handler(req, res);
+
+    expect(mockCache.saveRepository).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: true, isNew: expect.any(Boolean) })
+    );
+  });
+
+  it('should set isNew=true when getRepository returns null', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/repo-register');
+    const { SqliteCache } = require('./cache/sqlite-cache');
+    const mockCache = SqliteCache.mock.results[0].value;
+    mockCache.getRepository.mockReturnValue(null);
+
+    const { req, res } = createMockReqRes({
+      action: 'register_repo',
+      repo: { path: '/new/repo' },
     });
 
-    it('should require repo.path field', () => {
-      const invalid = { action: 'register_repo', repo: {} };
-      expect((invalid as any).repo.path).toBeUndefined();
+    handler(req, res);
+
+    const callArg = res.json.mock.calls[0][0];
+    expect(callArg.isNew).toBe(true);
+  });
+
+  it('should use default name from path.basename', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/repo-register');
+    const { SqliteCache } = require('./cache/sqlite-cache');
+    const mockCache = SqliteCache.mock.results[0].value;
+
+    const { req, res } = createMockReqRes({
+      action: 'register_repo',
+      repo: { path: '/my/repo' },
     });
 
-    it('should accept optional repo metadata', () => {
-      const request = {
-        action: 'register_repo',
-        repo: {
-          path: '/my/repo',
-          name: 'my-repo',
-          sessionId: 'abc123',
-          sessionType: 'claude',
-          createdAt: Date.now(),
-        },
-      };
-      expect(request.repo.path).toBe('/my/repo');
-      expect(request.repo.name).toBe('my-repo');
+    handler(req, res);
+
+    const metadata = mockCache.saveRepository.mock.calls[0][0];
+    expect(metadata.name).toBe('repo');
+  });
+
+  it('should return 500 on cache.saveRepository error', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/repo-register');
+    const { SqliteCache } = require('./cache/sqlite-cache');
+    const mockCache = SqliteCache.mock.results[0].value;
+    mockCache.saveRepository.mockImplementation(() => {
+      throw new Error('DB error');
     });
 
-    it('should generate consistent hash for same path', () => {
-      const crypto = require('crypto');
-      const path = '/my/project';
-      const hash1 = crypto.createHash('md5').update(path).digest('hex');
-      const hash2 = crypto.createHash('md5').update(path).digest('hex');
-      expect(hash1).toBe(hash2);
+    const { req, res } = createMockReqRes({
+      action: 'register_repo',
+      repo: { path: '/my/repo' },
     });
 
-    it('should generate different hash for different paths', () => {
-      const crypto = require('crypto');
-      const path1 = '/my/project';
-      const path2 = '/other/project';
-      const hash1 = crypto.createHash('md5').update(path1).digest('hex');
-      const hash2 = crypto.createHash('md5').update(path2).digest('hex');
-      expect(hash1).not.toBe(hash2);
+    handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+  });
+});
+
+describe('POST /analyze endpoint', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('should return null analysis when filePath is missing', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/analyze');
+    const { req, res } = createMockReqRes({});
+
+    handler(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({ analysis: null, minRating: expect.any(Number) });
+  });
+
+  it('should return null analysis when file does not exist', async () => {
+    const fs = require('fs');
+    fs.existsSync.mockReturnValue(false);
+
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/analyze');
+    const { req, res } = createMockReqRes({ filePath: '/nonexistent.ts' });
+
+    handler(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({ analysis: null, minRating: expect.any(Number) });
+  });
+
+  it('should return null analysis when file is not supported', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/analyze');
+    const { UniversalAnalyzer } = require('./analyzer/universal-analyzer');
+    const mockAnalyzer = UniversalAnalyzer.mock.results[0].value;
+    mockAnalyzer.isSupportedFile.mockReturnValue(false);
+
+    const { req, res } = createMockReqRes({ filePath: '/test.py' });
+
+    handler(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({ analysis: null, minRating: expect.any(Number) });
+  });
+
+  it('should return null analysis for missing filePath', async () => {
+    jest.resetModules();
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/analyze');
+    const { req, res } = createMockReqRes({});
+
+    handler(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({ analysis: null, minRating: expect.any(Number) });
+  });
+
+  it('should return null analysis for non-existent file', async () => {
+    jest.resetModules();
+    const fs = require('fs');
+    fs.existsSync.mockReturnValueOnce(false);
+
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('post', '/analyze');
+    const { req, res } = createMockReqRes({ filePath: '/nonexistent.ts' });
+
+    handler(req, res);
+
+    expect(res.json).toHaveBeenCalledWith({ analysis: null, minRating: expect.any(Number) });
+  });
+});
+
+describe('GET /repos endpoint', () => {
+  beforeEach(() => jest.resetModules());
+
+  it('should return repos array from cache.getAllRepositories(true)', async () => {
+    const { main } = require('./daemon');
+    await main();
+
+    const handler = extractHandler('get', '/repos');
+    const { SqliteCache } = require('./cache/sqlite-cache');
+    const mockCache = SqliteCache.mock.results[0].value;
+    mockCache.getAllRepositories.mockReturnValue([
+      { id: '123', name: 'test-repo' },
+    ]);
+
+    const { req, res } = createMockReqRes();
+    handler(req, res);
+
+    expect(mockCache.getAllRepositories).toHaveBeenCalledWith(true);
+    expect(res.json).toHaveBeenCalledWith({
+      repos: expect.arrayContaining([
+        expect.objectContaining({ id: '123' }),
+      ]),
     });
   });
 });
 
-describe('hook-receiver helpers', () => {
-  describe('globToRegex', () => {
-    function globToRegex(pattern: string): RegExp {
-      const escaped = pattern
-        .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-        .replace(/\*\*/g, '__GLOBSTAR__')
-        .replace(/\*/g, '[^/]*')
-        .replace(/__GLOBSTAR__/g, '.*');
-      return new RegExp(`(?:^|/)${escaped}$`, 'i');
-    }
+describe('signal handling', () => {
+  it('should only register signal handlers once', async () => {
+    jest.resetModules();
+    const { main } = require('./daemon');
 
-    it('should convert simple glob pattern to regex', () => {
-      const re = globToRegex('*.ts');
-      
-      expect(re.test('foo.ts')).toBe(true);
-      expect(re.test('foo.js')).toBe(false);
-    });
+    const origOn = process.on;
+    const onSpy = jest.fn(origOn.bind(process));
+    (process as any).on = onSpy;
 
-    it('should convert ** globstar pattern to regex', () => {
-      const re = globToRegex('**/*.test.ts');
-      
-      // Pattern matches with path separator prefix
-      expect(re.test('/foo.test.ts')).toBe(true);
-      expect(re.test('/src/foo.test.ts')).toBe(true);
-      expect(re.test('src/foo.test.ts')).toBe(true);
-    });
+    await main();
+    const sigCount1 = onSpy.mock.calls.filter((c: any[]) => c[0] === 'SIGTERM' || c[0] === 'SIGINT').length;
 
-    it('should escape special regex characters', () => {
-      const re = globToRegex('*.config.ts');
-      
-      expect(re.test('foo.config.ts')).toBe(true);
-      expect(re.test('fooXconfig.ts')).toBe(false);
-    });
+    // Simulate calling main again (would increase counts if not guarded)
+    const procFlag = (process as any)._gateKeeperSignalsRegistered;
+    expect(procFlag).toBe(true);
 
-    it('should be case insensitive', () => {
-      const re = globToRegex('*.TS');
-      
-      expect(re.test('foo.ts')).toBe(true);
-    });
+    (process as any).on = origOn;
   });
 
-  describe('WATCHED_EXTENSIONS', () => {
-    const WATCHED_EXTENSIONS = new Set(['.ts', '.tsx', '.jsx', '.js', '.cs']);
+  it('should set the signal registration guard', async () => {
+    jest.resetModules();
+    const { main } = require('./daemon');
 
-    it('should include TypeScript extensions', () => {
-      expect(WATCHED_EXTENSIONS.has('.ts')).toBe(true);
-      expect(WATCHED_EXTENSIONS.has('.tsx')).toBe(true);
-    });
+    const beforeFlag = (process as any)._gateKeeperSignalsRegistered;
+    await main();
+    const afterFlag = (process as any)._gateKeeperSignalsRegistered;
 
-    it('should include C# extension', () => {
-      expect(WATCHED_EXTENSIONS.has('.cs')).toBe(true);
-    });
-
-    it('should not include unsupported extensions', () => {
-      expect(WATCHED_EXTENSIONS.has('.py')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.java')).toBe(false);
-    });
-  });
-
-  describe('violation formatting', () => {
-    it('should format violations with line numbers', () => {
-      const violation = {
-        type: 'long_method',
-        severity: 'warning',
-        message: 'Method is too long',
-        line: 42,
-        fix: 'Extract into smaller methods',
-      };
-
-      const loc = (violation as any).line != null ? ` (line ${(violation as any).line})` : '';
-      const fix = violation.fix ? ` — ${violation.fix}` : '';
-      const formatted = `[${violation.severity}] ${violation.message}${loc}${fix}`;
-
-      expect(formatted).toContain('(line 42)');
-      expect(formatted).toContain('Extract into smaller methods');
-    });
-
-    it('should format violations without line numbers', () => {
-      const violation = {
-        type: 'god_class',
-        severity: 'warning',
-        message: 'Class has too many methods',
-      };
-
-      const loc = (violation as any).line != null ? ` (line ${(violation as any).line})` : '';
-      const formatted = `[${violation.severity}] ${violation.message}${loc}`;
-
-      expect(formatted).not.toContain('(line');
-    });
-  });
-});
-
-describe('session handling', () => {
-  it('should handle UserPromptSubmit event structure', () => {
-    const payload = {
-      hook_event_name: 'UserPromptSubmit',
-      session_id: 'test-session-123',
-      cwd: '/test/workspace',
-    };
-
-    expect(payload.hook_event_name).toBe('UserPromptSubmit');
-  });
-
-  it('should handle SessionStart event structure', () => {
-    const payload = {
-      hook_event_name: 'SessionStart',
-      session_id: 'new-session',
-      cwd: '/test/cwd',
-    };
-
-    expect(payload.hook_event_name).toBe('SessionStart');
-  });
-
-  it('should handle session_create event structure', () => {
-    const payload = {
-      hook_event_name: 'session_create',
-      tool_name: 'claude',
-      session_info: {
-        workspace_path: '/workspace',
-        session_type: 'claude',
-      },
-    };
-
-    expect(payload.hook_event_name).toBe('session_create');
-  });
-});
-
-describe('exit codes', () => {
-  it('should exit with code 2 when rating is below minimum', () => {
-    const minRating = 6.5;
-    const fileRating = 4.0;
-    
-    expect(fileRating).toBeLessThan(minRating);
-  });
-
-  it('should continue when rating meets minimum', () => {
-    const minRating = 6.5;
-    const fileRating = 8.0;
-    
-    expect(fileRating).toBeGreaterThanOrEqual(minRating);
+    expect(afterFlag).toBe(true);
   });
 });

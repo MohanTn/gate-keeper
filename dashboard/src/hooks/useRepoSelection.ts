@@ -7,6 +7,7 @@ interface UseRepoSelectionReturn {
     showRepoSelector: boolean;
     setShowRepoSelector: React.Dispatch<React.SetStateAction<boolean>>;
     handleRepoSelect: (repo: string) => void;
+    handleRepoDelete: (repoRoot: string) => void;
     refreshRepos: () => void;
 }
 
@@ -40,12 +41,18 @@ export function useRepoSelection(): UseRepoSelectionReturn {
         setShowRepoSelector(false);
     }, []);
 
+    const handleRepoDelete = useCallback((repoRoot: string) => {
+        if (selectedRepo === repoRoot) setSelectedRepo(null);
+        loadRepos();
+    }, [selectedRepo, loadRepos]);
+
     return {
         repos,
         selectedRepo,
         showRepoSelector,
         setShowRepoSelector,
         handleRepoSelect,
+        handleRepoDelete,
         refreshRepos: loadRepos,
     };
 }

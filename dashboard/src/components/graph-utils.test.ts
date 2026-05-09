@@ -1,4 +1,4 @@
-import { healthColor, healthLabel, buildTooltip, makeNodeColor, edgeId } from './graph-utils';
+import { healthColor, healthLabel, buildTooltip, makeNodeColor, edgeId, buildVisNodes } from './graph-utils';
 import type { GraphNode } from '../types';
 import { darkTokens } from '../ThemeContext';
 
@@ -87,5 +87,33 @@ describe('graph-utils', () => {
     };
     const tooltip = buildTooltip(node);
     expect(tooltip).toContain('test.ts');
+  });
+
+  describe('buildVisNodes — test-file badge', () => {
+    const mkNode = (id: string): GraphNode => ({
+      id, label: id.split('/').pop() || id,
+      type: 'typescript', rating: 7, size: 100, violations: [],
+      metrics: { linesOfCode: 100, cyclomaticComplexity: 1, numberOfMethods: 1, numberOfClasses: 0, importCount: 1 },
+    });
+
+    it('prepends [test] when archMode=true and file is a *.test.ts', () => {
+      const visNodes = buildVisNodes([mkNode('src/foo.test.ts')], new Map(), new Map(), darkTokens, true);
+      expect(visNodes[0].label).toBe('[test] foo.test.ts');
+    });
+
+    it('prepends [test] for *.spec.tsx files', () => {
+      const visNodes = buildVisNodes([mkNode('src/foo.spec.tsx')], new Map(), new Map(), darkTokens, true);
+      expect(visNodes[0].label).toBe('[test] foo.spec.tsx');
+    });
+
+    it('does not prepend [test] when archMode=false (default)', () => {
+      const visNodes = buildVisNodes([mkNode('src/foo.test.ts')], new Map(), new Map(), darkTokens);
+      expect(visNodes[0].label).toBe('foo.test.ts');
+    });
+
+    it('does not prepend [test] for non-test files even in archMode', () => {
+      const visNodes = buildVisNodes([mkNode('src/foo.ts')], new Map(), new Map(), darkTokens, true);
+      expect(visNodes[0].label).toBe('foo.ts');
+    });
   });
 });
