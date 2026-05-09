@@ -2,7 +2,7 @@ import React from 'react';
 import { GraphData, RepoInfo, GraphNode } from '../types';
 import { HeaderStat, HeaderButton, ScanProgressIndicator } from './HeaderWidgets';
 import { SearchResultItem } from './RepoSelector';
-import { ratingColor, ThemeTokens } from '../ThemeContext';
+import { ratingColor, ThemeTokens, useTheme } from '../ThemeContext';
 
 interface AppHeaderProps {
     repos: RepoInfo[];
@@ -37,20 +37,18 @@ interface AppHeaderProps {
 }
 
 function WsStatusBadge({ status, T }: { status: string; T: ThemeTokens }) {
-    const config: Record<string, { color: string; bg: string; label: string }> = {
-        connecting: { color: '#EAB308', bg: 'rgba(234,179,8,0.1)', label: 'Connecting' },
-        connected: { color: '#22C55E', bg: 'rgba(34,197,94,0.1)', label: 'Live' },
-        disconnected: { color: '#EF4444', bg: 'rgba(239,68,68,0.1)', label: 'Offline' },
+    const config: Record<string, { color: string; label: string }> = {
+        connecting: { color: T.yellow, label: 'Connecting' },
+        connected: { color: T.green, label: 'Connected' },
+        disconnected: { color: T.red, label: 'Offline' },
     };
-    const { color, bg, label } = config[status] ?? config.disconnected;
+    const { color, label } = config[status] ?? config.disconnected;
     return (
         <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            background: bg, border: `1px solid ${color}40`, borderRadius: 4,
-            padding: '1px 8px', fontSize: 10, fontWeight: 600, color,
-            textTransform: 'uppercase', letterSpacing: 0.5, flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            fontSize: 11, color: T.textMuted, flexShrink: 0,
         }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: color, display: 'inline-block' }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: color, display: 'inline-block' }} />
             {label}
         </div>
     );
@@ -64,6 +62,7 @@ export function AppHeader({
     onSearchChange, onSearchFocus, onSearchBlur, onSearchKeyDown, onSearchSelect,
     onToggleViolationsPanel, T,
 }: AppHeaderProps) {
+    const { mode, toggleTheme } = useTheme();
     return (
         <header style={{
             height: 48, minHeight: 48, background: T.panel,
@@ -72,7 +71,7 @@ export function AppHeader({
             zIndex: 30, flexShrink: 0,
         }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                <span style={{ fontSize: 15, fontWeight: 700, color: T.text, letterSpacing: -0.3 }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: T.text }}>
                     Gate Keeper
                 </span>
                 <WsStatusBadge status={wsStatus} T={T} />
@@ -90,7 +89,6 @@ export function AppHeader({
                     maxWidth: 200, overflow: 'hidden', flexShrink: 0,
                 }}
             >
-                <span style={{ fontSize: 11 }}>▾</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {currentRepoLabel ?? 'Select repo'}
                 </span>
@@ -119,7 +117,6 @@ export function AppHeader({
                         position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4,
                         background: T.panel, border: `1px solid ${T.borderBright}`,
                         borderRadius: 8, overflow: 'hidden', zIndex: 50,
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.3)',
                     }}>
                         {searchResults.map(node => (
                             <SearchResultItem key={node.id} node={node} onSelect={onSearchSelect} />
@@ -129,43 +126,33 @@ export function AppHeader({
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
-                <HeaderStat label="Files" value={filteredGraphData.nodes.length} color={T.textMuted} />
                 {overallRating != null && (
                     <HeaderStat label="Score" value={`${overallRating.toFixed(1)}`} color={ratingColor(overallRating, T)} bold />
                 )}
                 <HeaderStat label="Issues" value={totalViolations} color={totalViolations > 0 ? T.red : T.green} onClick={onToggleViolationsPanel} />
-                {patterns.length > 0 && (
-                    <HeaderStat label="Hidden" value={graphData.nodes.length - filteredGraphData.nodes.length} color={T.textDim} />
-                )}
             </div>
 
             <div style={{ flex: 1 }} />
 
             <HeaderButton label={`Filters${patterns.length > 0 ? ` (${patterns.length})` : ''}`} onClick={onToggleFilterPanel} disabled={!selectedRepo} />
-            <HeaderButton label="Files" onClick={onFileListOpen} disabled={filteredGraphData.nodes.length === 0} />
+            <HeaderButton label={`Files (${filteredGraphData.nodes.length})`} onClick={onFileListOpen} disabled={filteredGraphData.nodes.length === 0} />
             {scanning ? (
                 <ScanProgressIndicator analyzed={scanProgress?.analyzed ?? 0} total={scanProgress?.total ?? 0} />
             ) : (
-                <HeaderButton label="⟳ Scan All" onClick={onScanAll} disabled={wsStatus !== 'connected'} primary />
+                <HeaderButton label="Scan all" onClick={onScanAll} disabled={wsStatus !== 'connected'} primary />
             )}
             <HeaderButton label="Clear" onClick={onClearData} disabled={!selectedRepo || wsStatus !== 'connected'} danger />
 
             <button
-                onClick={() => {
-                    const theme = document.documentElement.getAttribute('data-theme');
-                    const next = theme === 'light' ? 'dark' : 'light';
-                    document.documentElement.setAttribute('data-theme', next);
-                    try { localStorage.setItem('gk-theme', next); } catch { }
-                    window.location.reload();
-                }}
+                onClick={toggleTheme}
                 title="Toggle theme"
                 style={{
-                    width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    background: 'transparent', border: `1px solid ${T.border}`, borderRadius: 6,
-                    color: T.textMuted, cursor: 'pointer', fontSize: 14, flexShrink: 0,
+                    height: 26, padding: '0 10px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'transparent', border: `1px solid ${T.border}`, borderRadius: 4,
+                    color: T.textMuted, cursor: 'pointer', fontSize: 11, fontWeight: 500, flexShrink: 0,
                 }}
             >
-                {document.documentElement.getAttribute('data-theme') === 'light' ? '☀' : '☾'}
+                {mode === 'light' ? 'Light' : 'Dark'}
             </button>
         </header>
     );

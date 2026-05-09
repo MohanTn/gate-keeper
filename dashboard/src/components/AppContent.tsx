@@ -75,17 +75,14 @@ export function AppContent({
     if (repoLoading) {
         return (
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
                     <div style={{
-                        width: 40, height: 40,
-                        border: `3px solid ${T.border}`, borderTopColor: T.accent,
+                        width: 28, height: 28,
+                        border: `2px solid ${T.border}`, borderTopColor: T.accent,
                         borderRadius: '50%', animation: 'spin 0.8s linear infinite',
                     }} />
-                    <span style={{ fontSize: 14, color: T.textMuted, fontWeight: 500 }}>
-                        Connecting to Gate Keeper…
-                    </span>
-                    <span style={{ fontSize: 12, color: T.textDim }}>
-                        WebSocket to port 5378
+                    <span style={{ fontSize: 13, color: T.textMuted }}>
+                        Connecting to daemon on port 5378…
                     </span>
                 </div>
             </div>
@@ -94,17 +91,16 @@ export function AppContent({
 
     if (wsStatus === 'disconnected') {
         return (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: T.bg, gap: 16 }}>
-                <div style={{ fontSize: 40 }}>⚠</div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>
-                    Lost connection to Gate Keeper daemon
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: T.bg, gap: 10 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>
+                    Daemon unreachable
                 </div>
-                <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'center', maxWidth: 380 }}>
-                    The dashboard cannot reach the daemon on port 5378. 
-                    Make sure <code style={{ background: T.panel, padding: '1px 5px', borderRadius: 3, color: T.accent }}>node dist/daemon.js</code> is running.
+                <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'center', maxWidth: 420 }}>
+                    Cannot connect to the daemon on port 5378.
+                    Run <code style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace', background: T.panel, padding: '1px 5px', borderRadius: 3 }}>node dist/daemon.js</code> to start it.
                 </div>
                 <div style={{ fontSize: 12, color: T.textDim }}>
-                    Auto-reconnecting every 3 seconds…
+                    Retrying every 3 seconds.
                 </div>
             </div>
         );
@@ -112,13 +108,12 @@ export function AppContent({
 
     if (!selectedRepo) {
         return (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: T.bg, gap: 12 }}>
-                <div style={{ fontSize: 40 }}>◈</div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>
-                    Select a repository
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: T.bg, gap: 8 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>
+                    No repository selected
                 </div>
                 <div style={{ fontSize: 13, color: T.textMuted }}>
-                    Choose a repo from the dropdown above to view analysis data.
+                    Pick one from the dropdown in the header.
                 </div>
             </div>
         );
@@ -126,24 +121,23 @@ export function AppContent({
 
     if (wsStatus === 'connected' && filteredGraphData.nodes.length === 0 && !scanning) {
         return (
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: T.bg, gap: 16 }}>
-                <div style={{ fontSize: 40 }}>🔍</div>
-                <div style={{ fontSize: 15, fontWeight: 600, color: T.text }}>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: T.bg, gap: 12 }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: T.text }}>
                     No files analyzed yet
                 </div>
-                <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'center', maxWidth: 360 }}>
+                <div style={{ fontSize: 13, color: T.textMuted, textAlign: 'center', maxWidth: 420 }}>
                     Run a scan to analyze code quality across all files in this repository.
                 </div>
                 <button
                     onClick={onScanAll}
                     style={{
-                        background: T.accentDim, border: `1px solid ${T.accent}`,
-                        borderRadius: 6, color: '#EFF6FF', cursor: 'pointer',
-                        fontSize: 13, fontWeight: 600, padding: '8px 20px',
+                        background: 'transparent', border: `1px solid ${T.border}`,
+                        borderRadius: 4, color: T.text, cursor: 'pointer',
+                        fontSize: 12, fontWeight: 500, padding: '6px 14px',
                         marginTop: 4,
                     }}
                 >
-                    ⟳ Scan All Files
+                    Scan all files
                 </button>
             </div>
         );
@@ -181,7 +175,9 @@ export function AppContent({
                     title="Drag to resize right panel"
                 />
             )}
-            <FileListDrawer graphData={filteredGraphData} onNodeSelect={onFileListSelect} onClose={onFileListClose} width={panelWidth} />
+            {showFileList && (
+                <FileListDrawer graphData={filteredGraphData} onNodeSelect={onFileListSelect} onClose={onFileListClose} width={panelWidth} />
+            )}
             {showFilterPanel && selectedRepo && (
                 <FilterPanel patterns={patterns} onAdd={onAddPattern} onRemove={onRemovePattern} onClose={onFilterClose}
                     excludedCount={graphData.nodes.length - filteredGraphData.nodes.length}

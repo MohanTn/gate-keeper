@@ -94,24 +94,23 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
       style={{
         flex: `0 0 ${width}px`, background: T.panel, borderLeft: `1px solid ${T.border}`,
         display: 'flex', flexDirection: 'column',
-        boxShadow: '-2px 0 8px rgba(0,0,0,0.1)',
         overflow: 'hidden',
       }}
     >
         {/* Header */}
         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>All Files</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>All Files</span>
             <button
               onClick={onClose}
               style={{
-                background: 'none', border: 'none', color: T.textFaint, cursor: 'pointer',
-                fontSize: 18, lineHeight: 1, padding: '2px 6px',
+                background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
+                borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 11,
               }}
               onMouseEnter={e => { e.currentTarget.style.color = T.text; }}
-              onMouseLeave={e => { e.currentTarget.style.color = T.textFaint; }}
+              onMouseLeave={e => { e.currentTarget.style.color = T.textMuted; }}
             >
-              ×
+              Close
             </button>
           </div>
 
@@ -127,24 +126,19 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
           </div>
 
           {/* Search */}
-          <div style={{ position: 'relative' }}>
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: 13, color: T.textDim, pointerEvents: 'none' }}>
-              ⌕
-            </span>
-            <input
-              type="text"
-              value={search}
-              onChange={e => setState(prev => ({ ...prev, search: e.target.value }))}
-              placeholder="Filter files…"
-              style={{
-                width: '100%', padding: '7px 10px 7px 30px',
-                background: T.elevated, border: `1px solid ${T.border}`,
-                borderRadius: 6, color: T.text, fontSize: 13, outline: 'none',
-              }}
-              onFocus={e => { e.currentTarget.style.borderColor = T.accent; }}
-              onBlur={e => { e.currentTarget.style.borderColor = T.border; }}
-            />
-          </div>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setState(prev => ({ ...prev, search: e.target.value }))}
+            placeholder="Filter files…"
+            style={{
+              width: '100%', padding: '6px 10px',
+              background: T.elevated, border: `1px solid ${T.border}`,
+              borderRadius: 4, color: T.text, fontSize: 12, outline: 'none',
+            }}
+            onFocus={e => { e.currentTarget.style.borderColor = T.accent; }}
+            onBlur={e => { e.currentTarget.style.borderColor = T.border; }}
+          />
         </div>
 
         {/* Column headers */}
@@ -237,11 +231,8 @@ const FileRow = memo(function FileRow({ node, onSelect }: { node: GraphNode; onS
           <div style={{ fontSize: 10, color: T.red, marginTop: 1 }}>{errCount} error{errCount !== 1 ? 's' : ''}</div>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <div style={{ width: 44, height: 4, background: T.border, borderRadius: 2, overflow: 'hidden' }}>
-          <div style={{ width: `${(node.rating / 10) * 100}%`, height: '100%', background: rc(node.rating, T), borderRadius: 2 }} />
-        </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: rc(node.rating, T), minWidth: 20 }}>{node.rating}</span>
+      <div style={{ textAlign: 'right' }}>
+        <span style={{ fontSize: 12, fontWeight: 600, color: rc(node.rating, T) }}>{node.rating}</span>
       </div>
       <div style={{ fontSize: 12, color: T.textMuted, textAlign: 'right' }}>{node.metrics.linesOfCode}</div>
       <div style={{

@@ -59,7 +59,6 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
         position: 'absolute', top: 0, right: 0, bottom: 0,
         width: 420, background: T.panel, borderLeft: `1px solid ${T.border}`,
         display: 'flex', flexDirection: 'column', zIndex: 20,
-        boxShadow: '-8px 0 32px rgba(0,0,0,0.3)',
       }}
     >
       {/* Header */}
@@ -69,13 +68,12 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
             onClick={onClose}
             style={{
               background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
-              borderRadius: 6, padding: '5px 12px', cursor: 'pointer', fontSize: 12,
-              display: 'flex', alignItems: 'center', gap: 4,
+              borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11,
             }}
             onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderBright; e.currentTarget.style.color = T.text; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.textMuted; }}
           >
-            ← Back
+            Close
           </button>
           <LangBadge lang={node.type} />
         </div>
@@ -95,35 +93,24 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
       <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 24px' }}>
 
         {/* Health score + status */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '18px 0', borderBottom: `1px solid ${T.border}` }}>
-          <div style={{
-            width: 64, height: 64, borderRadius: 12,
-            background: T.elevated, border: `2px solid ${rc(node.rating, T)}`,
-            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ fontSize: 24, fontWeight: 800, color: rc(node.rating, T), lineHeight: 1 }}>{node.rating}</span>
-            <span style={{ fontSize: 10, color: T.textDim }}>/10</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: 13, color: T.textMuted }}>Rating:</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: rc(node.rating, T) }}>{node.rating} / 10</span>
+            <span style={{ fontSize: 12, color: T.textMuted }}>({healthLabel(node.rating)})</span>
           </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-              <span style={{ width: 8, height: 8, borderRadius: '50%', background: rc(node.rating, T) }} />
-              <span style={{ fontSize: 14, fontWeight: 600, color: rc(node.rating, T) }}>
-                {healthLabel(node.rating)}
-              </span>
+          {detail?.gitDiff ? (
+            <div style={{ fontSize: 12, color: T.textFaint }}>
+              <span style={{ color: T.green }}>+{detail.gitDiff.added}</span>
+              {' / '}
+              <span style={{ color: T.red }}>−{detail.gitDiff.removed}</span>
+              {' lines changed'}
             </div>
-            {detail?.gitDiff ? (
-              <div style={{ fontSize: 12, color: T.textFaint }}>
-                <span style={{ color: T.green }}>+{detail.gitDiff.added}</span>
-                {' / '}
-                <span style={{ color: T.red }}>−{detail.gitDiff.removed}</span>
-                {' lines changed'}
-              </div>
-            ) : (
-              <div style={{ fontSize: 12, color: T.textDim }}>
-                {loading ? 'Loading…' : 'No uncommitted changes'}
-              </div>
-            )}
-          </div>
+          ) : (
+            <div style={{ fontSize: 12, color: T.textDim }}>
+              {loading ? 'Loading…' : 'No uncommitted changes'}
+            </div>
+          )}
         </div>
 
         {/* Metrics */}
@@ -142,8 +129,8 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
         {detail && (
           <Section label="Rating Breakdown">
             {detail.ratingBreakdown.length === 0 ? (
-              <div style={{ fontSize: 13, color: T.green, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>✓</span> No deductions — clean file
+              <div style={{ fontSize: 13, color: T.green }}>
+                No deductions — clean file
               </div>
             ) : (
               <div>
@@ -391,7 +378,7 @@ function CopyButton({ node }: { node: GraphNode }) {
         cursor: 'pointer', transition: 'all 0.2s', flexShrink: 0,
       }}
     >
-      {copied ? '✓ Copied' : 'Copy'}
+      {copied ? 'Copied' : 'Copy'}
     </button>
   );
 }

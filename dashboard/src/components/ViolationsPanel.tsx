@@ -158,7 +158,7 @@ export function ViolationsPanel({ graphData, onClose, T }: ViolationsPanelProps)
       <div
         className="fade-in"
         onClick={onClose}
-        style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.25)', zIndex: 19 }}
+        style={{ position: 'absolute', inset: 0, background: 'transparent', zIndex: 19 }}
       />
       <div
         className="slide-in-right"
@@ -166,12 +166,11 @@ export function ViolationsPanel({ graphData, onClose, T }: ViolationsPanelProps)
           position: 'absolute', top: 0, right: 0, bottom: 0, width: 520,
           background: T.panel, borderLeft: `1px solid ${T.border}`,
           display: 'flex', flexDirection: 'column', zIndex: 20,
-          boxShadow: '-8px 0 32px rgba(0,0,0,0.3)',
         }}
       >
         <div style={{ padding: '14px 20px', borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-            <span style={{ fontSize: 14, fontWeight: 700, color: T.text }}>All Violations</span>
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>All Violations</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <button
                 onClick={handleCopy}
@@ -184,18 +183,18 @@ export function ViolationsPanel({ graphData, onClose, T }: ViolationsPanelProps)
                   cursor: 'pointer', fontSize: 11, fontWeight: 600, transition: 'all 0.15s',
                 }}
               >
-                {copied ? '✓ Copied' : '⎘ Copy'}
+                {copied ? 'Copied' : 'Copy'}
               </button>
               <button
                 onClick={onClose}
                 style={{
-                  background: 'none', border: 'none', color: T.textFaint,
-                  cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '2px 6px',
+                  background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
+                  cursor: 'pointer', fontSize: 11, padding: '3px 10px', borderRadius: 4,
                 }}
                 onMouseEnter={handlers.onCloseBtnHover}
                 onMouseLeave={handlers.onCloseBtnLeave}
               >
-                ×
+                Close
               </button>
             </div>
           </div>
@@ -213,25 +212,19 @@ export function ViolationsPanel({ graphData, onClose, T }: ViolationsPanelProps)
               Info {counts.info}
             </button>
           </div>
-          <div style={{ position: 'relative' }}>
-            <span style={{
-              position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)',
-              fontSize: 13, color: T.textDim, pointerEvents: 'none',
-            }}>⌕</span>
-            <input
-              type="text"
-              value={search}
-              onChange={handleSearchChange}
-              placeholder="Filter by file or message…"
-              style={{
-                width: '100%', padding: '7px 10px 7px 30px',
-                background: T.elevated, border: `1px solid ${T.border}`,
-                borderRadius: 6, color: T.text, fontSize: 13, outline: 'none',
-              }}
-              onFocus={handlers.onSearchInputFocus}
-              onBlur={handlers.onSearchInputBlur}
-            />
-          </div>
+          <input
+            type="text"
+            value={search}
+            onChange={handleSearchChange}
+            placeholder="Filter by file or message…"
+            style={{
+              width: '100%', padding: '6px 10px',
+              background: T.elevated, border: `1px solid ${T.border}`,
+              borderRadius: 4, color: T.text, fontSize: 12, outline: 'none',
+            }}
+            onFocus={handlers.onSearchInputFocus}
+            onBlur={handlers.onSearchInputBlur}
+          />
         </div>
         <div style={{
           padding: '6px 20px', fontSize: 11, color: T.textDim,

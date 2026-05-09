@@ -702,17 +702,11 @@ export function VisGraphView({
       {graphData.nodes.length === 0 && (
         <div style={{
           position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
-          alignItems: 'center', justifyContent: 'center', gap: 16,
+          alignItems: 'center', justifyContent: 'center', gap: 8,
           pointerEvents: 'none', zIndex: 1,
         }}>
-          <div style={{
-            width: 64, height: 64, borderRadius: 16, border: `2px dashed ${T.border}`,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <span style={{ fontSize: 28, opacity: 0.3 }}>⬡</span>
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: T.textMuted }}>No files analyzed</div>
-          <div style={{ fontSize: 13, color: T.textFaint }}>Scan your workspace to build the dependency map</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: T.textMuted }}>No files analyzed</div>
+          <div style={{ fontSize: 12, color: T.textFaint }}>Scan your workspace to build the dependency map.</div>
         </div>
       )}
 
@@ -729,12 +723,12 @@ export function VisGraphView({
             padding: '6px 12px', fontSize: 12, fontWeight: 500,
             background: archMode ? T.accent : T.panel, border: `1px solid ${archMode ? T.accent : T.border}`,
             borderRadius: 6, color: archMode ? 'white' : T.textMuted, cursor: 'pointer',
-            backdropFilter: 'blur(8px)', transition: 'all 0.2s ease',
+            transition: 'all 0.15s ease',
           }}
           onMouseEnter={handleArchBtnMouseEnter}
           onMouseLeave={handleArchBtnMouseLeave}
         >
-          Arch {archMode ? '✓' : ''}
+          Arch view{archMode ? ': on' : ''}
         </button>
         {archMode && (
           <button
@@ -745,22 +739,21 @@ export function VisGraphView({
               background: violationOnly ? T.red : T.panel,
               border: `1px solid ${violationOnly ? T.red : T.border}`,
               borderRadius: 6, color: violationOnly ? 'white' : T.textMuted, cursor: 'pointer',
-              backdropFilter: 'blur(8px)', transition: 'all 0.2s ease',
+              transition: 'all 0.15s ease',
             }}
             onMouseEnter={handleViolationBtnMouseEnter}
             onMouseLeave={handleViolationBtnMouseLeave}
           >
-            ⚠ Violations {violationOnly ? 'ON' : ''}
+            Violations only{violationOnly ? ': on' : ''}
           </button>
         )}
         {violationCount > 0 && (
-          <div style={{
-            padding: '6px 8px', fontSize: 10, fontWeight: 600,
-            background: T.red, color: 'white', borderRadius: 6,
-            display: 'flex', alignItems: 'center', gap: 4,
+          <span style={{
+            display: 'flex', alignItems: 'center',
+            padding: '0 4px', fontSize: 11, color: T.red, fontWeight: 500,
           }}>
             {violationCount} violation{violationCount > 1 ? 's' : ''}
-          </div>
+          </span>
         )}
       </div>
 
@@ -777,8 +770,6 @@ export function VisGraphView({
         violationsBySeverity={violationsBySeverity}
         allViolations={allViolations}
         archConfig={archConfig}
-        violationOnly={violationOnly}
-        setViolationOnly={setViolationOnly}
       />
 
 
@@ -789,16 +780,9 @@ export function VisGraphView({
       }}>
         <ZoomBtn label="+" onClick={handleZoomIn} T={T} />
         <ZoomBtn label="−" onClick={handleZoomOut} T={T} />
-        <ZoomBtn label="⊡" onClick={handleFitView} T={T} />
+        <ZoomBtn label="Fit" onClick={handleFitView} T={T} />
       </div>
 
-      {/* Interaction hint */}
-      <div style={{
-        position: 'absolute', bottom: 52, right: 16, fontSize: 10, color: T.textFaint,
-        pointerEvents: 'none', textAlign: 'right', lineHeight: 1.8, zIndex: 10,
-      }}>
-        Hover to highlight · Click to inspect · Drag to rearrange
-      </div>
     </div>
   );
 }
@@ -815,8 +799,6 @@ interface LegendPanelProps {
   violationsBySeverity?: Record<string, number>;
   allViolations?: Map<string, ArchViolation>;
   archConfig?: ArchMapping | null;
-  violationOnly?: boolean;
-  setViolationOnly?: (v: boolean) => void;
 }
 
 function LegendPanel({
@@ -831,8 +813,6 @@ function LegendPanel({
   violationsBySeverity = { error: 0, warning: 0, info: 0 },
   allViolations = new Map(),
   archConfig,
-  violationOnly,
-  setViolationOnly,
 }: LegendPanelProps) {
   const [showDetails, setShowDetails] = useState(false);
 
@@ -847,10 +827,6 @@ function LegendPanel({
   const handleConfidenceChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (setMinConfidence) setMinConfidence(parseInt(e.target.value) / 100);
   }, [setMinConfidence]);
-
-  const handleViolationOnlyChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (setViolationOnly) setViolationOnly(e.target.checked);
-  }, [setViolationOnly]);
 
   const handleDetailsMouseEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.currentTarget.style.background = T.elevated;
@@ -880,7 +856,7 @@ function LegendPanel({
   return (
     <div style={{
       position: 'absolute', bottom: 16, left: 16,
-      background: T.panel, backdropFilter: 'blur(8px)',
+      background: T.panel,
       border: `1px solid ${T.border}`, borderRadius: 8,
       zIndex: 10,
       maxWidth: 480,
@@ -907,26 +883,6 @@ function LegendPanel({
               {violationsBySeverity.error > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#ef4444', borderRadius: 2 }} /> Error: {violationsBySeverity.error}</span>}
               {violationsBySeverity.warning > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#f97316', borderRadius: 2 }} /> Warning: {violationsBySeverity.warning}</span>}
               {violationsBySeverity.info > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#eab308', borderRadius: 2 }} /> Info: {violationsBySeverity.info}</span>}
-            </div>
-          )}
-
-          {/* Violation-only toggle */}
-          {violationCount > 0 && setViolationOnly && (
-            <div style={{ marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.border}` }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none', fontSize: 10 }}>
-                <input
-                  type="checkbox"
-                  checked={violationOnly}
-                  onChange={handleViolationOnlyChange}
-                  style={{ cursor: 'pointer' }}
-                />
-                <span style={{ color: T.textMuted, fontWeight: 500 }}>
-                  ⚠ Show only illegal back-references
-                </span>
-              </label>
-              <div style={{ fontSize: 9, color: T.textFaint, marginTop: 2, marginLeft: 22 }}>
-                Dims all legal connections; highlights only wrong-direction imports
-              </div>
             </div>
           )}
 
@@ -970,38 +926,38 @@ function LegendPanel({
               <div style={{ marginBottom: 8, fontWeight: 600, color: T.textMuted }}>Architectural Violations — Scoring & Examples:</div>
 
               <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Reverse Dependency (High confidence)</div>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Reverse Dependency (High confidence)</div>
                 <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>service.ts → api.ts</span> (service → api violation)</div>
                 <div style={{ marginBottom: 2, color: T.textFaint }}>90% confidence: Strong violation of dependency flow</div>
                 <div style={{ marginBottom: 4, color: T.textFaint }}>Why bad: Inner layers shouldn't import from outer layers</div>
-                <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Use dependency injection or interfaces</div>
+                <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Use dependency injection or interfaces</div>
               </div>
 
               <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>⚠ Type Import (Low confidence)</div>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Note: Type Import (Low confidence)</div>
                 <div style={{ marginBottom: 2 }}><span style={{ color: T.orange, fontWeight: 600 }}>service.ts → types.ts</span> (importing types is OK)</div>
                 <div style={{ marginBottom: 2, color: T.textFaint }}>30% confidence: Likely false positive for type-only imports</div>
                 <div style={{ marginBottom: 4, color: T.textFaint }}>Suppressed: Type imports don't create true runtime coupling</div>
-                <div style={{ color: T.green, fontWeight: 500 }}>✓ Use: {'import type { T } from \'...\''}</div>
+                <div style={{ color: T.green, fontWeight: 500 }}>Use: {'import type { T } from \'...\''}</div>
               </div>
 
               <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>⚠ Safe External Lib (Ignored)</div>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Note: Safe External Lib (Ignored)</div>
                 <div style={{ marginBottom: 2 }}><span style={{ color: T.orange, fontWeight: 600 }}>domain.ts → date-fns</span> (safe utility library)</div>
                 <div style={{ marginBottom: 2, color: T.textFaint }}>Not flagged: Utility libs (lodash, zod, date-fns) are allowed</div>
                 <div style={{ marginBottom: 4, color: T.textFaint }}>Common safe libs: date-fns, zod, uuid, lodash, chalk</div>
               </div>
 
               <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ External Dependency from Core</div>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: External Dependency from Core</div>
                 <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>domain.ts → custom-vendor-lib</span> (framework coupling)</div>
                 <div style={{ marginBottom: 2, color: T.textFaint }}>80% confidence: Core shouldn't depend on non-standard libs</div>
                 <div style={{ marginBottom: 4, color: T.textFaint }}>Why bad: Couples business logic to specific vendors</div>
-                <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: infrastructure.ts → vendor-lib → domain.ts (adapter pattern)</div>
+                <div style={{ color: T.green, fontWeight: 500 }}>Recommended: infrastructure.ts → vendor-lib → domain.ts (adapter pattern)</div>
               </div>
 
               <div>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Cross-Layer Cycles (Highest severity)</div>
+                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Cross-Layer Cycles (Highest severity)</div>
                 <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>service.ts ↔ repository.ts</span> (circular across layers)</div>
                 <div style={{ marginBottom: 2, color: T.textFaint }}>95% confidence: Real architectural problem, high severity</div>
                 <div style={{ color: T.textFaint }}>Why bad: Makes testing impossible, hides true dependencies</div>
@@ -1012,10 +968,10 @@ function LegendPanel({
       ) : (
         <div style={{ padding: '8px 14px', fontSize: 11, color: T.textMuted }}>
           <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: showDetails ? 8 : 0 }}>
-            <span><span style={{ color: T.green, fontWeight: 700 }}>━</span> Healthy ≥8</span>
-            <span><span style={{ color: T.yellow, fontWeight: 700 }}>━</span> Warning ≥6</span>
-            <span><span style={{ color: T.orange, fontWeight: 700 }}>━</span> Degraded ≥4</span>
-            <span><span style={{ color: T.red, fontWeight: 700 }}>━</span> Critical &lt;4</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.green, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Healthy ≥8</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.yellow, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Warning ≥6</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.orange, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Degraded ≥4</span>
+            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.red, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Critical &lt;4</span>
           </div>
           {showDetails && (
             <div style={{ fontSize: 10, color: T.textFaint, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
@@ -1023,24 +979,24 @@ function LegendPanel({
                 <div style={{ marginBottom: 12 }}>
                   <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 6 }}>React/TypeScript — Code Patterns:</div>
                   <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Too Many Hooks</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Too Many Hooks</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>5+ hook calls in one component (useState, useEffect, etc.)</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: ≤ 3–5 hooks, extract rest to custom hooks</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: ≤ 3–5 hooks, extract rest to custom hooks</div>
                   </div>
                   <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Missing Key Props</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Missing Key Props</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>{`items.map(item => <div>{item.name}</div>)`} — no key</div>
                     <div style={{ color: T.green, fontWeight: 500 }}>{`✓ Correct: <div key={item.id}>`}</div>
                   </div>
                   <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Inline Event Handlers</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Inline Event Handlers</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>{`<button onClick={() => setState(x + 1)}>`} creates new function on every render</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: useCallback or named function</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: useCallback or named function</div>
                   </div>
                   <div>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Any Type</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Any Type</div>
                     <div style={{ color: T.textFaint }}>Unsafe: bypasses TypeScript safety</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: explicit types or `unknown`</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: explicit types or `unknown`</div>
                   </div>
                 </div>
               )}
@@ -1048,24 +1004,24 @@ function LegendPanel({
                 <div>
                   <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 6 }}>C#/.NET — Code Patterns:</div>
                   <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ God Class</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: God Class</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>Classes with 20+ methods doing many unrelated tasks</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: ≤ 20 methods, each with single responsibility</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: ≤ 20 methods, each with single responsibility</div>
                   </div>
                   <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Long Methods</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Long Methods</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>{'Methods >50 lines hard to test and reason about'}</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Extract logic into smaller, focused methods</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Extract logic into smaller, focused methods</div>
                   </div>
                   <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Tight Coupling</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Tight Coupling</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>Constructor with 5+ parameters (OrderService, PaymentService, LogService...)</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Use config object or DI container</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Use config object or DI container</div>
                   </div>
                   <div>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>❌ Empty Catch Blocks</div>
+                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Empty Catch Blocks</div>
                     <div style={{ marginBottom: 2, color: T.textFaint }}>Silently swallows exceptions, hides bugs</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>✓ Correct: Log, handle, or re-throw with context</div>
+                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Log, handle, or re-throw with context</div>
                   </div>
                 </div>
               )}
@@ -1085,7 +1041,7 @@ function LegendPanel({
         onMouseEnter={handleDetailsMouseEnter}
         onMouseLeave={handleDetailsMouseLeave}
       >
-        {showDetails ? '▲ Hide patterns' : '▼ Show ideal patterns'}
+        {showDetails ? 'Hide pattern details' : 'Show pattern details'}
       </button>
     </div>
   );
@@ -1107,7 +1063,6 @@ function ZoomBtn({ label, onClick, T }: { label: string; onClick: () => void; T:
         width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
         background: T.panel, border: `1px solid ${T.border}`,
         borderRadius: 6, color: T.textMuted, cursor: 'pointer', fontSize: 16,
-        backdropFilter: 'blur(8px)',
       }}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
