@@ -147,7 +147,7 @@ describe('VisGraphView', () => {
       );
 
       expect(screen.getByText('No files analyzed')).toBeInTheDocument();
-      expect(screen.getByText('Scan your workspace to build the dependency map')).toBeInTheDocument();
+      expect(screen.getByText('Scan your workspace to build the dependency map.')).toBeInTheDocument();
     });
 
     it('renders the component with graph data', () => {
@@ -184,7 +184,7 @@ describe('VisGraphView', () => {
 
       expect(screen.getByText('+')).toBeInTheDocument();
       expect(screen.getByText('−')).toBeInTheDocument();
-      expect(screen.getByText('⊡')).toBeInTheDocument();
+      expect(screen.getByText('Fit')).toBeInTheDocument();
     });
 
     it('renders interaction hint', () => {
@@ -200,7 +200,7 @@ describe('VisGraphView', () => {
         />
       );
 
-      expect(screen.getByText(/Hover to highlight/)).toBeInTheDocument();
+      expect(screen.getByText(/Drag to pan, scroll to zoom/)).toBeInTheDocument();
     });
 
     it('renders the canvas container', () => {
@@ -616,7 +616,7 @@ describe('VisGraphView', () => {
         />
       );
 
-      const fitBtn = screen.getByText('⊡');
+      const fitBtn = screen.getByText('Fit');
       expect(fitBtn).toBeInTheDocument();
       expect(fitBtn.tagName).toBe('BUTTON');
 
@@ -955,8 +955,8 @@ describe('VisGraphView', () => {
       // Check all expected elements are present
       expect(screen.getByText('+')).toBeInTheDocument();
       expect(screen.getByText('−')).toBeInTheDocument();
-      expect(screen.getByText('⊡')).toBeInTheDocument();
-      expect(screen.getByText(/Hover to highlight/)).toBeInTheDocument();
+      expect(screen.getByText('Fit')).toBeInTheDocument();
+      expect(screen.getByText(/Drag to pan, scroll to zoom/)).toBeInTheDocument();
       expect(screen.getByText(/Healthy ≥8/)).toBeInTheDocument();
     });
 

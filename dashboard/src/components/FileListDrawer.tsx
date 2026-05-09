@@ -1,16 +1,6 @@
-import React, { useCallback, useMemo, useState, useRef, useEffect, memo } from 'react';
+import React, { useCallback, useMemo, useState, memo } from 'react';
 import { GraphData, GraphNode } from '../types';
-import { ThemeTokens, useTheme } from '../ThemeContext';
-
-const ITEM_HEIGHT = 48;
-const OVERSCAN = 4;
-
-function rc(r: number, T: ThemeTokens) {
-  if (r >= 8) return T.green;
-  if (r >= 6) return T.yellow;
-  if (r >= 4) return T.orange;
-  return T.red;
-}
+import { useTheme, ratingColor } from '../ThemeContext';
 
 // ── Props ──────────────────────────────────────────────────
 interface FileListDrawerProps {
@@ -29,24 +19,6 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
     { search: '', sortField: 'rating', sortDir: 'asc' }
   );
   const { search, sortField, sortDir } = state;
-
-  // Virtual scroll state
-  const [scrollTop, setScrollTop] = useState(0);
-  const [listHeight, setListHeight] = useState(400);
-  const listRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = listRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setListHeight(el.clientHeight));
-    ro.observe(el);
-    setListHeight(el.clientHeight);
-    return () => ro.disconnect();
-  }, []);
-
-  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    setScrollTop(e.currentTarget.scrollTop);
-  }, []);
 
   const handleCloseBtnEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
     e.currentTarget.style.color = T.text;
@@ -101,12 +73,6 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
     return { overallRating, totalViolations, errors };
   }, [graphData.nodes]);
 
-  // Virtual window computation
-  const totalHeight = filtered.length * ITEM_HEIGHT;
-  const startIdx = Math.max(0, Math.floor(scrollTop / ITEM_HEIGHT) - OVERSCAN);
-  const endIdx = Math.min(filtered.length, Math.ceil((scrollTop + listHeight) / ITEM_HEIGHT) + OVERSCAN);
-  const offsetY = startIdx * ITEM_HEIGHT;
-
   return (
     <div
       style={{
@@ -137,7 +103,7 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
             <MiniCard
               label="Score"
               value={stats.overallRating != null ? stats.overallRating.toFixed(1) : '—'}
-              color={stats.overallRating != null ? rc(stats.overallRating, T) : T.textDim}
+              color={stats.overallRating != null ? ratingColor(stats.overallRating, T) : T.textDim}
             />
             <MiniCard label="Issues" value={stats.totalViolations} color={stats.totalViolations > 0 ? T.yellow : T.green} />
             <MiniCard label="Errors" value={stats.errors} color={stats.errors > 0 ? T.red : T.green} />
@@ -176,20 +142,16 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
           ))}
         </div>
 
-        {/* Virtualized file list */}
-        <div ref={listRef} style={{ flex: 1, overflowY: 'auto' }} onScroll={handleScroll}>
+        {/* File list */}
+        <div style={{ flex: 1, overflowY: 'auto' }}>
           {filtered.length === 0 ? (
             <div style={{ padding: 32, textAlign: 'center', color: T.textDim, fontSize: 13 }}>
               {search ? 'No files match your search' : 'No files analyzed yet'}
             </div>
           ) : (
-            <div style={{ height: totalHeight, position: 'relative' }}>
-              <div style={{ position: 'absolute', top: offsetY, left: 0, right: 0 }}>
-                {filtered.slice(startIdx, endIdx).map(node => (
-                  <FileRow key={node.id} node={node} onSelect={onNodeSelect} />
-                ))}
-              </div>
-            </div>
+            filtered.map(node => (
+              <FileRow key={node.id} node={node} onSelect={onNodeSelect} />
+            ))
           )}
         </div>
     </div>
@@ -243,7 +205,7 @@ const FileRow = memo(function FileRow({ node, onSelect }: { node: GraphNode; onS
       style={{
         display: 'grid', gridTemplateColumns: '1fr 80px 50px 50px',
         alignItems: 'center', padding: '0 20px',
-        height: ITEM_HEIGHT, boxSizing: 'border-box',
+        height: 48, boxSizing: 'border-box',
         borderBottom: `1px solid ${T.border}`, cursor: 'pointer', transition: 'background 0.1s',
       }}
       onMouseEnter={rowOnMouseEnter}
@@ -258,7 +220,7 @@ const FileRow = memo(function FileRow({ node, onSelect }: { node: GraphNode; onS
         )}
       </div>
       <div style={{ textAlign: 'right' }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: rc(node.rating, T) }}>{node.rating}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: ratingColor(node.rating, T) }}>{node.rating}</span>
       </div>
       <div style={{ fontSize: 12, color: T.textMuted, textAlign: 'right' }}>{node.metrics.linesOfCode}</div>
       <div style={{

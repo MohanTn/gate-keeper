@@ -28,6 +28,113 @@ describe('CoverageAnalyzer', () => {
       expect((analyzer as any).isTestFile('/src/foo.ts')).toBe(false);
       expect((analyzer as any).isTestFile('/src/utils.ts')).toBe(false);
     });
+
+    it('should recognize C# *Test.cs files', () => {
+      expect((analyzer as any).isTestFile('/src/UserServiceTest.cs')).toBe(true);
+    });
+
+    it('should recognize C# *Tests.cs files', () => {
+      expect((analyzer as any).isTestFile('/src/UserServiceTests.cs')).toBe(true);
+    });
+
+    it('should recognize C# *.Test.cs files', () => {
+      expect((analyzer as any).isTestFile('/src/UserService.Test.cs')).toBe(true);
+    });
+
+    it('should recognize C# *.Tests.cs files', () => {
+      expect((analyzer as any).isTestFile('/src/UserService.Tests.cs')).toBe(true);
+    });
+
+    it('should return false for regular C# source files', () => {
+      expect((analyzer as any).isTestFile('/src/UserService.cs')).toBe(false);
+      expect((analyzer as any).isTestFile('/src/Startup.cs')).toBe(false);
+    });
+  });
+
+  describe('isConfigFile', () => {
+    it('should recognize jest.config.* files', () => {
+      expect((analyzer as any).isConfigFile('/project/jest.config.js')).toBe(true);
+      expect((analyzer as any).isConfigFile('/project/jest.config.ts')).toBe(true);
+    });
+
+    it('should recognize vite.config.* files', () => {
+      expect((analyzer as any).isConfigFile('/project/vite.config.ts')).toBe(true);
+    });
+
+    it('should recognize tsconfig*.json files', () => {
+      expect((analyzer as any).isConfigFile('/project/tsconfig.json')).toBe(true);
+      expect((analyzer as any).isConfigFile('/project/tsconfig.build.json')).toBe(true);
+    });
+
+    it('should recognize .eslintrc* files', () => {
+      expect((analyzer as any).isConfigFile('/project/.eslintrc')).toBe(true);
+      expect((analyzer as any).isConfigFile('/project/.eslintrc.json')).toBe(true);
+    });
+
+    it('should recognize package.json', () => {
+      expect((analyzer as any).isConfigFile('/project/package.json')).toBe(true);
+    });
+
+    it('should return false for regular source files', () => {
+      expect((analyzer as any).isConfigFile('/project/src/foo.ts')).toBe(false);
+      expect((analyzer as any).isConfigFile('/project/src/Component.tsx')).toBe(false);
+      expect((analyzer as any).isConfigFile('/project/src/Program.cs')).toBe(false);
+    });
+  });
+
+  describe('isExcludedFromCoverage', () => {
+    it('should return true for .cs files with [ExcludeFromCodeCoverage]', () => {
+      const content = `
+        using System.Diagnostics.CodeAnalysis;
+
+        [ExcludeFromCodeCoverage]
+        public class Startup {
+          public void Configure() { }
+        }
+      `;
+      const tempFile = '/tmp/test-exclude-coverage.cs';
+      require('fs').writeFileSync(tempFile, content);
+      expect((analyzer as any).isExcludedFromCoverage(tempFile)).toBe(true);
+      require('fs').unlinkSync(tempFile);
+    });
+
+    it('should handle full attribute name [ExcludeFromCodeCoverageAttribute]', () => {
+      const content = `
+        [ExcludeFromCodeCoverageAttribute]
+        public class Startup { }
+      `;
+      const tempFile = '/tmp/test-exclude-coverage-attr.cs';
+      require('fs').writeFileSync(tempFile, content);
+      expect((analyzer as any).isExcludedFromCoverage(tempFile)).toBe(true);
+      require('fs').unlinkSync(tempFile);
+    });
+
+    it('should handle attribute with parameters', () => {
+      const content = `
+        [ExcludeFromCodeCoverage(Justification = "Legacy code")]
+        public class Startup { }
+      `;
+      const tempFile = '/tmp/test-exclude-coverage-params.cs';
+      require('fs').writeFileSync(tempFile, content);
+      expect((analyzer as any).isExcludedFromCoverage(tempFile)).toBe(true);
+      require('fs').unlinkSync(tempFile);
+    });
+
+    it('should return false for .cs files without the attribute', () => {
+      const content = `
+        public class Startup {
+          public void Configure() { }
+        }
+      `;
+      const tempFile = '/tmp/test-no-exclude-coverage.cs';
+      require('fs').writeFileSync(tempFile, content);
+      expect((analyzer as any).isExcludedFromCoverage(tempFile)).toBe(false);
+      require('fs').unlinkSync(tempFile);
+    });
+
+    it('should return false for non-.cs files', () => {
+      expect((analyzer as any).isExcludedFromCoverage('/src/foo.ts')).toBe(false);
+    });
   });
 
   describe('buildCoverageResult', () => {

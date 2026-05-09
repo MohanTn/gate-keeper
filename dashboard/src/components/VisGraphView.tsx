@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Network } from 'vis-network/standalone';
 import { DataSet } from 'vis-data/standalone';
-import { GraphData, GraphNode, ArchMapping } from '../types';
+import { GraphData, GraphNode } from '../types';
 import { useTheme } from '../ThemeContext';
 import {
   healthColor,
@@ -10,20 +10,6 @@ import {
   buildVisEdges,
   computeHierarchicalPositions,
 } from './graph-utils';
-import {
-  computeArchLayerPositions,
-  computeFullArchLayout,
-  detectArchViolations,
-  buildNodeLayerMap,
-  getViolationSourceNodes,
-  ARCH_VIOLATION_EDGE_STYLE,
-  ARCH_ALLOWED_EDGE_STYLE,
-  ARCH_VIOLATION_NODE_BORDER,
-  ARCH_VIOLATION_NODE_BORDER_WIDTH,
-  type ArchViolation,
-  type ViolationType,
-} from './arch-layers';
-import { drawLayerContainer } from './arch-rendering';
 
 // ── Props ──────────────────────────────────────────────────
 interface VisGraphViewProps {
@@ -35,7 +21,6 @@ interface VisGraphViewProps {
   focusNodeId?: string | null;
   fitTrigger?: number;
   scanning?: boolean;
-  archConfig?: ArchMapping | null;
 }
 
 // ── Vis-Network Data Types ─────────────────────────────────
@@ -61,14 +46,6 @@ interface VisEdgeData {
   color?: { color: string; highlight: string };
   width?: number;
   _isCircular?: boolean;
-  dashes?: boolean | number[];
-  _violation?: ArchViolation;
-  smooth?: {
-    enabled: boolean;
-    type: string;
-    forceDirection: string;
-    roundness: number;
-  };
 }
 
 interface NetworkRefs {
@@ -80,19 +57,18 @@ interface NetworkRefs {
   treePositionsRef: React.RefObject<Map<string, { x: number; y: number }>>;
 }
 
-// ── Setup shared refs ──────────────────────────────────────
-function useNetworkRefs(params: VisGraphViewProps): NetworkRefs {
+// ── Shared refs ────────────────────────────────────────────
+function useNetworkRefs(): NetworkRefs {
   const containerRef = useRef<HTMLDivElement>(null);
   const networkRef = useRef<Network | undefined>(undefined);
   const nodesDS = useRef<DataSet<VisNodeData>>(new DataSet<VisNodeData>());
   const edgesDS = useRef<DataSet<VisEdgeData>>(new DataSet<VisEdgeData>());
   const pinnedRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const treePositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-
   return { containerRef, networkRef, nodesDS, edgesDS, pinnedRef, treePositionsRef };
 }
 
-// ── Load and persist positions ──────────────────────────────
+// ── Position persistence ───────────────────────────────────
 function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) {
   useEffect(() => {
     if (!selectedRepo) { refs.pinnedRef.current.clear(); return; }
@@ -106,105 +82,26 @@ function usePositionPersistence(refs: NetworkRefs, selectedRepo: string | null) 
   }, [selectedRepo, refs.pinnedRef]);
 }
 
-// ── Arch Edge Routing (fan-out parallel edges, layer-distance arcs) ──
-function applyArchEdgeRouting(
-  visEdges: VisEdgeData[],
-  nodes: GraphNode[],
-  edges: GraphEdge[],
-  archConfig: ArchMapping,
-): void {
-  const nodeLayerMap = buildNodeLayerMap(nodes, archConfig);
-  const layerOrder = [...archConfig.layers]
-    .sort((a, b) => a.order - b.order)
-    .map(l => l.id);
-  const layerIndex = new Map<string, number>(
-    layerOrder.map((id, i) => [id, i]),
-  );
-
-  // Group edges by (sourceLayer, targetLayer) pair
-  const layerPairEdges = new Map<string, VisEdgeData[]>();
-  for (const edge of visEdges) {
-    const srcLayer = nodeLayerMap.get(edge.from!);
-    const tgtLayer = nodeLayerMap.get(edge.to!);
-    if (!srcLayer || !tgtLayer) continue;
-    const key = `${srcLayer}\x00${tgtLayer}`;
-    if (!layerPairEdges.has(key)) layerPairEdges.set(key, []);
-    layerPairEdges.get(key)!.push(edge);
-  }
-
-  // Fan out edges per layer pair
-  for (const pairEdges of layerPairEdges.values()) {
-    if (pairEdges.length === 0) continue;
-
-    const first = pairEdges[0];
-    const srcLayer = nodeLayerMap.get(first.from!)!;
-    const tgtLayer = nodeLayerMap.get(first.to!)!;
-    const srcIdx = layerIndex.get(srcLayer) ?? 0;
-    const tgtIdx = layerIndex.get(tgtLayer) ?? 0;
-    const layerDistance = Math.abs(tgtIdx - srcIdx);
-    // Base roundness grows with layer span — edges crossing more layers
-    // need a tighter arc to clear intermediate nodes.
-    const baseRoundness = 0.2 + layerDistance * 0.08;
-
-    if (pairEdges.length === 1) {
-      // Single edge: CW curve with roundness proportional to span
-      pairEdges[0].smooth = {
-        enabled: true,
-        type: 'curvedCW',
-        forceDirection: 'horizontal',
-        roundness: Math.min(baseRoundness + 0.2, 0.85),
-      };
-    } else {
-      // Multiple parallel edges between the same layer pair:
-      // alternate curvedCW/curvedCCW and increase roundness with offset
-      // from the median, fanning them apart vertically.
-      const halfCount = (pairEdges.length - 1) / 2;
-      pairEdges.forEach((edge, i) => {
-        const offset = i - halfCount;
-        const direction = offset <= 0 ? 'curvedCW' : 'curvedCCW';
-        const roundness = baseRoundness + Math.abs(offset) * 0.15;
-        edge.smooth = {
-          enabled: true,
-          type: direction,
-          forceDirection: 'horizontal',
-          roundness: Math.min(roundness, 0.9),
-        };
-      });
-    }
-  }
-}
-
-// ── Sync node and edge updates ────────────────────────────
+// ── Sync graph data, node selection, scanning interaction ──
 function useSyncGraphData(
   refs: NetworkRefs,
   graphData: GraphData,
   T: ReturnType<typeof useTheme>['T'],
-  archMode?: boolean,
-  violationTypeFilters?: Record<ViolationType, boolean>,
-  minConfidence?: number,
-  archConfig?: ArchMapping | null,
-  violationOnly?: boolean,
+  focusNodeId?: string | null,
+  highlightNodeId?: string,
+  scanning?: boolean,
 ) {
   const LARGE_GRAPH_THRESHOLD = 200;
-  // Provide defaults if not passed
-  const filters = violationTypeFilters || {
-    'reverse-dependency': true,
-    'external-from-core': true,
-    'cross-layer-cycle': true,
-  };
-  const minConf = minConfidence ?? 0.4;
 
   useEffect(() => {
     const isLarge = graphData.nodes.length > LARGE_GRAPH_THRESHOLD;
-    const positions = archMode
-      ? computeArchLayerPositions(graphData.nodes, archConfig || undefined, graphData.edges)
-      : isLarge
-      ? new Map()
+    const positions = isLarge
+      ? new Map<string, { x: number; y: number }>()
       : computeHierarchicalPositions(graphData.nodes, graphData.edges);
     refs.treePositionsRef.current.clear();
     for (const [k, v] of positions) refs.treePositionsRef.current.set(k, v);
 
-    const visNodes = buildVisNodes(graphData.nodes, refs.pinnedRef.current, refs.treePositionsRef.current, T, archMode);
+    const visNodes = buildVisNodes(graphData.nodes, refs.pinnedRef.current, refs.treePositionsRef.current, T);
     const currentIds = new Set(refs.nodesDS.current.getIds() as string[]);
     const newIds = new Set(visNodes.map(n => n.id as string));
 
@@ -224,106 +121,14 @@ function useSyncGraphData(
         }
       }
     }
-  }, [graphData.nodes, graphData.edges, T, refs, archMode, archConfig]);
+  }, [graphData.nodes, graphData.edges, T, refs]);
 
   useEffect(() => {
     refs.edgesDS.current.clear();
-    const visEdges = buildVisEdges(graphData, T) as VisEdgeData[];
-
-    // Apply arch violation styling if in arch mode
-    if (archMode) {
-      const nodeLayerMap = buildNodeLayerMap(graphData.nodes, archConfig || undefined);
-      const layerOrder = archConfig?.layers?.sort((a, b) => a.order - b.order).map(l => l.id);
-      const allViolations = detectArchViolations(graphData.edges, nodeLayerMap, layerOrder, archConfig?.connections);
-
-      // Filter violations by type and confidence threshold
-      const filteredViolations = new Map(
-        Array.from(allViolations.entries()).filter(([, violation]) =>
-          filters[violation.type] && violation.confidence >= minConf
-        )
-      );
-
-      for (const edge of visEdges) {
-        if (filteredViolations.has(edge.id)) {
-          const violation = filteredViolations.get(edge.id)!;
-          const severityColor = violation.severity === 'error' ? ARCH_VIOLATION_EDGE_STYLE.color : violation.severity === 'warning' ? '#f97316' : '#eab308';
-          edge.color = { color: severityColor, highlight: ARCH_VIOLATION_EDGE_STYLE.highlightColor };
-          edge.width = ARCH_VIOLATION_EDGE_STYLE.width;
-          edge.dashes = [...ARCH_VIOLATION_EDGE_STYLE.dashes];
-          edge._violation = violation;
-        } else if (violationOnly) {
-          // In violation-only mode, dim all non-violation edges
-          edge.color = { color: T.edgeDim, highlight: T.edgeDim };
-          edge.width = 0.3;
-          edge.dashes = false;
-        } else {
-          // Allowed cross-layer edges: dashed gray, low contrast
-          edge.color = { color: ARCH_ALLOWED_EDGE_STYLE.color, highlight: ARCH_ALLOWED_EDGE_STYLE.highlightColor };
-          edge.width = ARCH_ALLOWED_EDGE_STYLE.width;
-          edge.dashes = [...ARCH_ALLOWED_EDGE_STYLE.dashes];
-        }
-      }
-    }
-
-    // In arch mode, apply per-edge smooth routing to fan out parallel
-    // edges and increase arc roundness for multi-layer spans.
-    if (archMode && archConfig) {
-      applyArchEdgeRouting(visEdges, graphData.nodes, graphData.edges, archConfig);
-    }
-
+    const visEdges = buildVisEdges(graphData, T);
     refs.edgesDS.current.add(visEdges);
-  }, [graphData.edges, T, archMode, graphData.nodes, violationTypeFilters, minConfidence, violationOnly]);
+  }, [graphData.edges, T, graphData.nodes]);
 
-  // Apply red warning borders to violation source nodes
-  useEffect(() => {
-    if (!archMode) return;
-
-    const nodeLayerMap = buildNodeLayerMap(graphData.nodes, archConfig || undefined);
-    const layerOrder = archConfig?.layers?.sort((a, b) => a.order - b.order).map(l => l.id);
-    const allViolations = detectArchViolations(graphData.edges, nodeLayerMap, layerOrder, archConfig?.connections);
-    const filteredViolations = new Map(
-      Array.from(allViolations.entries()).filter(([, violation]) =>
-        filters[violation.type] && violation.confidence >= minConf
-      )
-    );
-    const violationSourceNodes = getViolationSourceNodes(filteredViolations);
-
-    // Update all nodes: apply red border to violation sources, restore normal for others
-    const nodeUpdates = graphData.nodes.map(node => {
-      if (violationSourceNodes.has(node.id)) {
-        return {
-          id: node.id,
-          borderWidth: ARCH_VIOLATION_NODE_BORDER_WIDTH,
-          color: {
-            background: T.cardBg,
-            border: ARCH_VIOLATION_NODE_BORDER,
-            highlight: { background: T.cardBgHover, border: '#dc2626' },
-            hover: { background: T.cardBgHover, border: ARCH_VIOLATION_NODE_BORDER },
-          },
-        };
-      }
-      return {
-        id: node.id,
-        borderWidth: 2,
-        color: makeNodeColor(healthColor(node.rating, T)),
-      };
-    });
-    refs.nodesDS.current.update(nodeUpdates);
-  }, [graphData.nodes, graphData.edges, T, archMode, violationTypeFilters, minConfidence, archConfig]);
-}
-
-// ── Update interaction on scanning state
-function useUpdateScanningInteraction(refs: React.RefObject<Network | undefined>, scanning?: boolean) {
-  useEffect(() => {
-    if (!refs.current) return;
-    refs.current.setOptions({
-      interaction: { dragView: !scanning }
-    });
-  }, [refs, scanning]);
-}
-
-// ── Focus and highlight node selection
-function useNodeSelection(refs: NetworkRefs, graphData: GraphData, focusNodeId: string | null | undefined, highlightNodeId: string | undefined, T: ReturnType<typeof useTheme>['T']) {
   useEffect(() => {
     if (!refs.networkRef.current || !focusNodeId) return;
     refs.networkRef.current.selectNodes([focusNodeId], false);
@@ -348,31 +153,34 @@ function useNodeSelection(refs: NetworkRefs, graphData: GraphData, focusNodeId: 
       if (gn) {
         refs.nodesDS.current.update({
           id: highlightNodeId,
-          color: makeNodeColor(healthColor(gn.rating, T)),
+          color: makeNodeColor(healthColor(gn.rating, T), T),
           borderWidth: 2,
         });
       }
     };
   }, [highlightNodeId, graphData.nodes, T, refs]);
+
+  useEffect(() => {
+    if (!refs.networkRef.current) return;
+    refs.networkRef.current.setOptions({
+      interaction: { dragView: !scanning }
+    });
+  }, [refs, scanning]);
 }
 
-// ── Initialize network instance ────────────────────────────
-function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T'], archMode?: boolean, archConfig?: ArchMapping | null) {
+// ── Initialize network ─────────────────────────────────────
+function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: VisGraphViewProps, T: ReturnType<typeof useTheme>['T']) {
   const graphDataRef = useRef(graphData);
   const onNodeClickRef = useRef(params.onNodeClick);
   const onCanvasClickRef = useRef(params.onCanvasClick);
   const selectedRepoRef = useRef(params.selectedRepo);
-  const archModeRef = useRef(archMode);
-  const archConfigRef = useRef(archConfig);
 
   useEffect(() => {
     graphDataRef.current = graphData;
     onNodeClickRef.current = params.onNodeClick;
     onCanvasClickRef.current = params.onCanvasClick;
     selectedRepoRef.current = params.selectedRepo;
-    archModeRef.current = archMode;
-    archConfigRef.current = archConfig;
-  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo, archMode, archConfig]);
+  }, [graphData, params.onNodeClick, params.onCanvasClick, params.selectedRepo]);
 
   useEffect(() => {
     if (!refs.containerRef.current || refs.networkRef.current) return;
@@ -422,43 +230,27 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
 
     (refs.networkRef as React.MutableRefObject<Network | undefined>).current = network;
 
+    const nodeById = () => new Map(graphDataRef.current.nodes.map(n => [n.id, n]));
     let lastHoverUpdatedIds: string[] = [];
     let lastHoverEdgeIds: string[] = [];
-
-    // Register beforeDrawing handler for arch layer container boxes
-    network.on('beforeDrawing', (ctx: CanvasRenderingContext2D) => {
-      if (!archModeRef.current) return;
-
-      const layout = computeFullArchLayout(
-        graphDataRef.current.nodes,
-        archConfigRef.current || undefined,
-        graphDataRef.current.edges,
-      );
-
-      ctx.save();
-      for (const geom of layout.geometry.values()) {
-        drawLayerContainer(ctx, geom, layout.globalMinY, layout.globalMaxY);
-      }
-      ctx.restore();
-    });
-
-    const eventHandlers = createNetworkEventHandlers(graphDataRef, onNodeClickRef, onCanvasClickRef, selectedRepoRef, refs, T);
 
     network.on('hoverNode', (hoverParams: { node: string }) => {
       const nodeId = hoverParams.node;
       const isLargeGraph = graphDataRef.current.nodes.length > 200;
       const connectedNodeIds = network.getConnectedNodes(nodeId) as string[];
       const connectedEdgeIds = network.getConnectedEdges(nodeId) as string[];
-      // Build O(1) lookup map once per event instead of O(n) .find() per node
-      const nodeById = new Map(graphDataRef.current.nodes.map(n => [n.id, n]));
-      isLargeGraph
-        ? handleLargeGraphHover(nodeId, connectedNodeIds, connectedEdgeIds, nodeById)
-        : handleSmallGraphHover(nodeId, connectedNodeIds, connectedEdgeIds, nodeById);
+      const nodeMap = nodeById();
+
+      if (isLargeGraph) {
+        handleLargeGraphHover(nodeId, connectedNodeIds, connectedEdgeIds, nodeMap);
+      } else {
+        handleSmallGraphHover(nodeId, connectedNodeIds, connectedEdgeIds, nodeMap);
+      }
     });
 
     network.on('blurNode', restoreStyles);
-    network.on('click', eventHandlers.handleNodeClick);
-    network.on('dragEnd', eventHandlers.handleNodeDragEnd);
+    network.on('click', handleNetworkClick);
+    network.on('dragEnd', handleNodeDragEnd);
 
     const fitTimer = setTimeout(() => {
       try {
@@ -467,13 +259,13 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
           maxZoomLevel: 1.2,
           minZoomLevel: 0.15,
         });
-      } catch { }
+      } catch { /* fit may fail on empty graph */ }
     }, 200);
 
-    function handleLargeGraphHover(nodeId: string, connectedNodeIds: string[], connectedEdgeIds: string[], nodeById: Map<string, GraphNode>) {
+    function handleLargeGraphHover(nodeId: string, connectedNodeIds: string[], connectedEdgeIds: string[], nodeMap: Map<string, GraphNode>) {
       const touchedIds = [nodeId, ...connectedNodeIds];
       const nodeUpdates = touchedIds.map(id => {
-        const gn = nodeById.get(id);
+        const gn = nodeMap.get(id);
         const baseColor = healthColor(gn?.rating ?? 5, T);
         return {
           id,
@@ -489,11 +281,11 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       refs.nodesDS.current.update(nodeUpdates);
 
       const edgeUpdates = connectedEdgeIds.map(id => {
-        const e = refs.edgesDS.current.get(id);
+        const e = refs.edgesDS.current.get(id) as unknown as VisEdgeData;
         const isCirc = e?._isCircular;
         return {
           id,
-          color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
+          color: { color: isCirc ? T.edgeCircular : T.edgeHighlight, highlight: T.edgeHighlight },
           width: 2.5,
         };
       });
@@ -503,14 +295,14 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       lastHoverEdgeIds = connectedEdgeIds;
     }
 
-    function handleSmallGraphHover(nodeId: string, connectedNodeIds: string[], connectedEdgeIds: string[], nodeById: Map<string, GraphNode>) {
+    function handleSmallGraphHover(nodeId: string, connectedNodeIds: string[], connectedEdgeIds: string[], nodeMap: Map<string, GraphNode>) {
       const connectedSet = new Set(connectedNodeIds);
       connectedSet.add(nodeId);
       const connectedEdgeSet = new Set(connectedEdgeIds);
 
       const allNodeIds = refs.nodesDS.current.getIds() as string[];
       const nodeUpdates = allNodeIds.map(id => {
-        const gn = nodeById.get(id);
+        const gn = nodeMap.get(id);
         const baseColor = healthColor(gn?.rating ?? 5, T);
         if (connectedSet.has(id)) {
           return {
@@ -542,11 +334,11 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       const allEdgeIds = refs.edgesDS.current.getIds() as string[];
       const edgeUpdates = allEdgeIds.map(id => {
         if (connectedEdgeSet.has(id)) {
-          const e = refs.edgesDS.current.get(id);
+          const e = refs.edgesDS.current.get(id) as unknown as VisEdgeData;
           const isCirc = e?._isCircular;
           return {
             id,
-            color: { color: isCirc ? 'rgba(249,115,22,0.85)' : T.edgeHighlight, highlight: T.edgeHighlight },
+            color: { color: isCirc ? T.edgeCircular : T.edgeHighlight, highlight: T.edgeHighlight },
             width: 2.5,
           };
         }
@@ -563,24 +355,24 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
 
     function restoreStyles() {
       const isLargeGraph = graphDataRef.current.nodes.length > 200;
-      const nodeById = new Map(graphDataRef.current.nodes.map(n => [n.id, n]));
+      const nodeMap = nodeById();
 
       if (isLargeGraph && lastHoverUpdatedIds.length > 0) {
         const nodeUpdates = lastHoverUpdatedIds.map(id => {
-          const gn = nodeById.get(id);
+          const gn = nodeMap.get(id);
           const color = healthColor(gn?.rating ?? 5, T);
-          return { id, color: makeNodeColor(color), borderWidth: 2 };
+          return { id, color: makeNodeColor(color, T), borderWidth: 2 };
         });
         refs.nodesDS.current.update(nodeUpdates);
 
         const edgeUpdates = lastHoverEdgeIds.map(id => {
-          const e = refs.edgesDS.current.get(id);
+          const e = refs.edgesDS.current.get(id) as unknown as VisEdgeData;
           const isCirc = e?._isCircular;
           return {
             id,
             color: {
               color: isCirc ? T.edgeCircular : T.edgeDefault,
-              highlight: isCirc ? 'rgba(249,115,22,1)' : T.edgeHighlight,
+              highlight: isCirc ? T.edgeCircular : T.edgeHighlight,
             },
             width: isCirc ? 2.5 : 2,
           };
@@ -591,11 +383,11 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       } else {
         const allNodeIds = refs.nodesDS.current.getIds() as string[];
         const nodeUpdates = allNodeIds.map(id => {
-          const gn = nodeById.get(id);
+          const gn = nodeMap.get(id);
           const color = healthColor(gn?.rating ?? 5, T);
           return {
             id,
-            color: makeNodeColor(color),
+            color: makeNodeColor(color, T),
             font: { color: T.text, size: 14, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
             borderWidth: 2,
           };
@@ -604,9 +396,6 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
 
         refs.edgesDS.current.clear();
         const rebuiltEdges = buildVisEdges(graphDataRef.current, T);
-        if (archModeRef.current && archConfigRef.current) {
-          applyArchEdgeRouting(rebuiltEdges, graphDataRef.current.nodes, graphDataRef.current.edges, archConfigRef.current);
-        }
         refs.edgesDS.current.add(rebuiltEdges);
       }
     }
@@ -623,7 +412,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
 
     function handleNodeDragEnd(dragParams: { nodes: string[] }) {
       for (const nodeId of dragParams.nodes) {
-        const node = refs.nodesDS.current.get(nodeId);
+        const node = refs.nodesDS.current.get(nodeId) as unknown as VisNodeData | undefined;
         if (!node) continue;
         const pos = { x: node.x as number, y: node.y as number };
         refs.pinnedRef.current.set(nodeId, pos);
@@ -634,7 +423,7 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ repo: selectedRepoRef.current, nodeId, ...pos }),
-          }).catch(() => { });
+          }).catch(() => { /* network errors acceptable */ });
         }
       }
     }
@@ -644,66 +433,25 @@ function useInitializeNetwork(refs: NetworkRefs, graphData: GraphData, params: V
       network.destroy();
       (refs.networkRef as React.MutableRefObject<Network | undefined>).current = undefined;
     };
-  }, [T, graphData, archMode]);
+  }, [T]);
 }
 
-// ── Zoom and network event handlers ────────────────────────
-function createNetworkEventHandlers(
-  graphDataRef: React.MutableRefObject<GraphData>,
-  onNodeClickRef: React.MutableRefObject<(n: GraphNode) => void>,
-  onCanvasClickRef: React.MutableRefObject<() => void>,
-  selectedRepoRef: React.MutableRefObject<string | null>,
-  refs: NetworkRefs,
-  T: ReturnType<typeof useTheme>['T']
-) {
-  let lastHoverUpdatedIds: string[] = [];
-  let lastHoverEdgeIds: string[] = [];
-
-  return {
-    handleNodeClick: (clickParams: { nodes: string[] }) => {
-      if (clickParams.nodes.length > 0) {
-        const nodeId = clickParams.nodes[0];
-        const gn = graphDataRef.current.nodes.find(n => n.id === nodeId);
-        if (gn) onNodeClickRef.current(gn);
-      } else {
-        onCanvasClickRef.current();
-      }
-    },
-    handleNodeDragEnd: (dragParams: { nodes: string[] }) => {
-      for (const nodeId of dragParams.nodes) {
-        const node = refs.nodesDS.current.get(nodeId);
-        if (!node) continue;
-        const pos = { x: node.x as number, y: node.y as number };
-        refs.pinnedRef.current.set(nodeId, pos);
-        refs.nodesDS.current.update({ id: nodeId, physics: false });
-        if (selectedRepoRef.current) {
-          fetch('/api/positions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repo: selectedRepoRef.current, nodeId, ...pos }),
-          }).catch(() => { /* network errors acceptable */ });
-        }
-      }
-    },
-  };
-}
-
-function createZoomHandlers(networkRef: React.RefObject<Network | undefined>) {
-  return {
-    handleZoomIn() {
-      const net = networkRef.current; if (!net) return;
-      const s = net.getScale(); const p = net.getViewPosition();
-      net.moveTo({ position: p, scale: s * 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
-    },
-    handleZoomOut() {
-      const net = networkRef.current; if (!net) return;
-      const s = net.getScale(); const p = net.getViewPosition();
-      net.moveTo({ position: p, scale: s * 0.77, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
-    },
-    handleFitView() {
-      networkRef.current?.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' }, maxZoomLevel: 1 });
-    }
-  };
+// ── Zoom handlers ──────────────────────────────────────────
+function useZoomHandlers(networkRef: React.RefObject<Network | undefined>) {
+  const handleZoomIn = useCallback(() => {
+    const net = networkRef.current; if (!net) return;
+    const s = net.getScale(); const p = net.getViewPosition();
+    net.moveTo({ position: p, scale: s * 1.3, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+  }, [networkRef]);
+  const handleZoomOut = useCallback(() => {
+    const net = networkRef.current; if (!net) return;
+    const s = net.getScale(); const p = net.getViewPosition();
+    net.moveTo({ position: p, scale: s * 0.77, animation: { duration: 200, easingFunction: 'easeInOutQuad' } });
+  }, [networkRef]);
+  const handleFitView = useCallback(() => {
+    networkRef.current?.fit({ animation: { duration: 400, easingFunction: 'easeInOutQuad' }, maxZoomLevel: 1 });
+  }, [networkRef]);
+  return { handleZoomIn, handleZoomOut, handleFitView };
 }
 
 // ── Component ──────────────────────────────────────────────
@@ -717,70 +465,15 @@ export function VisGraphView({
   focusNodeId,
   fitTrigger,
   scanning,
-  archConfig,
 }: VisGraphViewProps) {
   const { T } = useTheme();
-  const [archMode, setArchMode] = useState(false);
-  const [violationOnly, setViolationOnly] = useState(false);
-  const [violationTypeFilters, setViolationTypeFilters] = useState<Record<ViolationType, boolean>>({
-    'reverse-dependency': true,
-    'external-from-core': true,
-    'cross-layer-cycle': true,
-  });
-  const [minConfidence, setMinConfidence] = useState(0.4); // Show all violations >= 40% confidence by default
-  const refs = useNetworkRefs({ graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger });
+  const refs = useNetworkRefs();
 
   usePositionPersistence(refs, selectedRepo);
-  useSyncGraphData(refs, graphData, T, archMode, violationTypeFilters, minConfidence, archConfig, violationOnly);
-  useNodeSelection(refs, graphData, focusNodeId, highlightNodeId, T);
-  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger, scanning, archConfig }, T, archMode, archConfig);
-  useUpdateScanningInteraction(refs.networkRef, scanning);
+  useSyncGraphData(refs, graphData, T, focusNodeId, highlightNodeId, scanning);
+  useInitializeNetwork(refs, graphData, { graphData, onNodeClick, onCanvasClick, highlightNodeId, selectedRepo, focusNodeId, fitTrigger, scanning }, T);
 
-  const { handleZoomIn, handleZoomOut, handleFitView } = createZoomHandlers(refs.networkRef);
-
-  // Stable callbacks for toggle buttons to avoid inline handler violations
-  const handleToggleArchMode = useCallback(() => setArchMode(prev => !prev), []);
-  const handleToggleViolationOnly = useCallback(() => setViolationOnly(prev => !prev), []);
-
-  const handleArchBtnMouseEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (!archMode) e.currentTarget.style.background = T.cardBgHover;
-  }, [archMode, T.cardBgHover]);
-  const handleArchBtnMouseLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (!archMode) e.currentTarget.style.background = T.panel;
-  }, [archMode, T.panel]);
-  const handleViolationBtnMouseEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (!violationOnly) e.currentTarget.style.background = T.cardBgHover;
-  }, [violationOnly, T.cardBgHover]);
-  const handleViolationBtnMouseLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    if (!violationOnly) e.currentTarget.style.background = T.panel;
-  }, [violationOnly, T.panel]);
-
-  const nodeLayerMap = useMemo(
-    () => archMode ? buildNodeLayerMap(graphData.nodes, archConfig || undefined) : null,
-    [archMode, graphData.nodes, archConfig]
-  );
-  const layerOrder = useMemo(
-    () => archConfig?.layers?.slice().sort((a, b) => a.order - b.order).map(l => l.id),
-    [archConfig]
-  );
-  const allViolations = useMemo(
-    () => archMode ? detectArchViolations(graphData.edges, nodeLayerMap!, layerOrder, archConfig?.connections) : new Map(),
-    [archMode, graphData.edges, nodeLayerMap, layerOrder, archConfig?.connections]
-  );
-  const filteredViolations = useMemo(
-    () => new Map(
-      Array.from(allViolations.entries()).filter(([, violation]) =>
-        violationTypeFilters[violation.type] && violation.confidence >= minConfidence
-      )
-    ),
-    [allViolations, violationTypeFilters, minConfidence]
-  );
-  const violationCount = filteredViolations.size;
-  const violationsBySeverity = useMemo(() => ({
-    error: Array.from(filteredViolations.values()).filter(v => v.severity === 'error').length,
-    warning: Array.from(filteredViolations.values()).filter(v => v.severity === 'warning').length,
-    info: Array.from(filteredViolations.values()).filter(v => v.severity === 'info').length,
-  }), [filteredViolations]);
+  const { handleZoomIn, handleZoomOut, handleFitView } = useZoomHandlers(refs.networkRef);
 
   return (
     <div style={{ flex: 1, position: 'relative', background: T.bg, overflow: 'hidden' }}>
@@ -798,66 +491,22 @@ export function VisGraphView({
 
       <div ref={refs.containerRef} style={{ width: '100%', height: '100%' }} />
 
-      {/* Arch View toggle button — top left */}
+      {/* Rating color legend */}
       <div style={{
-        position: 'absolute', top: 16, left: 16,
-        display: 'flex', gap: 8, zIndex: 10,
+        position: 'absolute', bottom: 16, left: 16,
+        background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8,
+        padding: '8px 14px', zIndex: 10,
       }}>
-        <button
-          onClick={handleToggleArchMode}
-          style={{
-            padding: '6px 12px', fontSize: 12, fontWeight: 500,
-            background: archMode ? T.accent : T.panel, border: `1px solid ${archMode ? T.accent : T.border}`,
-            borderRadius: 6, color: archMode ? 'white' : T.textMuted, cursor: 'pointer',
-            transition: 'all 0.15s ease',
-          }}
-          onMouseEnter={handleArchBtnMouseEnter}
-          onMouseLeave={handleArchBtnMouseLeave}
-        >
-          Arch view{archMode ? ': on' : ''}
-        </button>
-        {archMode && (
-          <button
-            onClick={handleToggleViolationOnly}
-            title={violationOnly ? 'Show all connections' : 'Show only illegal back-references'}
-            style={{
-              padding: '6px 12px', fontSize: 12, fontWeight: 500,
-              background: violationOnly ? T.red : T.panel,
-              border: `1px solid ${violationOnly ? T.red : T.border}`,
-              borderRadius: 6, color: violationOnly ? 'white' : T.textMuted, cursor: 'pointer',
-              transition: 'all 0.15s ease',
-            }}
-            onMouseEnter={handleViolationBtnMouseEnter}
-            onMouseLeave={handleViolationBtnMouseLeave}
-          >
-            Violations only{violationOnly ? ': on' : ''}
-          </button>
-        )}
-        {violationCount > 0 && (
-          <span style={{
-            display: 'flex', alignItems: 'center',
-            padding: '0 4px', fontSize: 11, color: T.red, fontWeight: 500,
-          }}>
-            {violationCount} violation{violationCount > 1 ? 's' : ''}
-          </span>
-        )}
+        <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 11, color: T.textMuted }}>
+          <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.green, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Healthy ≥8</span>
+          <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.yellow, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Warning ≥6</span>
+          <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.orange, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Degraded ≥4</span>
+          <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.red, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Critical &lt;4</span>
+        </div>
+        <div style={{ fontSize: 10, color: T.textFaint, marginTop: 6, borderTop: `1px solid ${T.border}`, paddingTop: 6 }}>
+          Drag to pan, scroll to zoom
+        </div>
       </div>
-
-      {/* Legend — context-aware */}
-      <LegendPanel
-        archMode={archMode}
-        graphData={graphData}
-        T={T}
-        violationTypeFilters={violationTypeFilters}
-        setViolationTypeFilters={setViolationTypeFilters}
-        minConfidence={minConfidence}
-        setMinConfidence={setMinConfidence}
-        violationCount={violationCount}
-        violationsBySeverity={violationsBySeverity}
-        allViolations={allViolations}
-        archConfig={archConfig}
-      />
-
 
       {/* Zoom controls */}
       <div style={{
@@ -868,280 +517,11 @@ export function VisGraphView({
         <ZoomBtn label="−" onClick={handleZoomOut} T={T} />
         <ZoomBtn label="Fit" onClick={handleFitView} T={T} />
       </div>
-
-    </div>
-  );
-}
-
-interface LegendPanelProps {
-  archMode: boolean;
-  graphData: GraphData;
-  T: ReturnType<typeof useTheme>['T'];
-  violationTypeFilters?: Record<ViolationType, boolean>;
-  setViolationTypeFilters?: (f: Record<ViolationType, boolean>) => void;
-  minConfidence?: number;
-  setMinConfidence?: (c: number) => void;
-  violationCount?: number;
-  violationsBySeverity?: Record<string, number>;
-  allViolations?: Map<string, ArchViolation>;
-  archConfig?: ArchMapping | null;
-}
-
-function LegendPanel({
-  archMode,
-  graphData,
-  T,
-  violationTypeFilters,
-  setViolationTypeFilters,
-  minConfidence,
-  setMinConfidence,
-  violationCount = 0,
-  violationsBySeverity = { error: 0, warning: 0, info: 0 },
-  allViolations = new Map(),
-  archConfig,
-}: LegendPanelProps) {
-  const [showDetails, setShowDetails] = useState(false);
-
-  const handleToggleDetails = useCallback(() => setShowDetails(prev => !prev), []);
-
-  const handleViolationTypeChange = useCallback((type: ViolationType) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (setViolationTypeFilters) {
-      setViolationTypeFilters({ ...violationTypeFilters!, [type]: e.target.checked });
-    }
-  }, [violationTypeFilters, setViolationTypeFilters]);
-
-  const handleConfidenceChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    if (setMinConfidence) setMinConfidence(parseInt(e.target.value) / 100);
-  }, [setMinConfidence]);
-
-  const handleDetailsMouseEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.background = T.elevated;
-    e.currentTarget.style.color = T.textMuted;
-  }, [T.elevated, T.textMuted]);
-
-  const handleDetailsMouseLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.background = 'transparent';
-    e.currentTarget.style.color = T.textDim;
-  }, [T.textDim]);
-  const hasTs = graphData.nodes.some(n => ['typescript', 'tsx', 'jsx'].includes(n.type));
-  const hasCsharp = graphData.nodes.some(n => n.type === 'csharp');
-
-  // Layers to render in legend — use arch.json layers if available, else fall back to Clean Architecture defaults
-  const legendLayers = archConfig
-    ? [...archConfig.layers].sort((a, b) => a.order - b.order).map(l => ({ label: l.label, color: l.color }))
-    : [
-        { label: 'Application', color: 'rgba(219,39,119,0.15)' },
-        { label: 'Interface', color: 'rgba(234,179,8,0.15)' },
-        { label: 'Use Case', color: 'rgba(59,130,246,0.15)' },
-        { label: 'Domain', color: 'rgba(34,197,94,0.15)' },
-        { label: 'Entity', color: 'rgba(16,185,129,0.15)' },
-        { label: 'Data', color: 'rgba(245,158,11,0.15)' },
-        { label: 'Infrastructure', color: 'rgba(239,68,68,0.15)' },
-      ];
-
-  return (
-    <div style={{
-      position: 'absolute', bottom: 16, left: 16,
-      background: T.panel,
-      border: `1px solid ${T.border}`, borderRadius: 8,
-      zIndex: 10,
-      maxWidth: 480,
-    }}>
-      {archMode ? (
-        <div style={{ padding: '8px 14px', fontSize: 11, color: T.textMuted }}>
-          {/* Arch layers legend — driven by arch.json */}
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: showDetails ? 8 : 0, flexWrap: 'wrap' }}>
-            {legendLayers.map(layer => (
-              <span key={layer.label}>
-                <span style={{
-                  display: 'inline-block', width: 12, height: 12,
-                  background: layer.color.replace(/[\d.]+\)$/, '0.25)'),
-                  border: `1px solid ${T.border}`, borderRadius: 2,
-                }} />
-                {' '}{layer.label.replace(/ Layer$/, '')}
-              </span>
-            ))}
-          </div>
-
-          {/* Violation severity colors */}
-          {violationCount > 0 && (
-            <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 10, marginTop: 8, paddingTop: 8, borderTop: `1px solid ${T.border}` }}>
-              {violationsBySeverity.error > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#ef4444', borderRadius: 2 }} /> Error: {violationsBySeverity.error}</span>}
-              {violationsBySeverity.warning > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#f97316', borderRadius: 2 }} /> Warning: {violationsBySeverity.warning}</span>}
-              {violationsBySeverity.info > 0 && <span><span style={{ display: 'inline-block', width: 8, height: 8, background: '#eab308', borderRadius: 2 }} /> Info: {violationsBySeverity.info}</span>}
-            </div>
-          )}
-
-          {/* Violation type toggles */}
-          {violationTypeFilters && setViolationTypeFilters && (
-            <div style={{ marginTop: 8, fontSize: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 4 }}>Show violations:</div>
-              {(['reverse-dependency', 'external-from-core', 'cross-layer-cycle'] as ViolationType[]).map(type => (
-                <label key={type} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', userSelect: 'none' }}>
-                  <input
-                    type="checkbox"
-                    checked={violationTypeFilters[type]}
-                    onChange={handleViolationTypeChange(type)}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span>{type === 'reverse-dependency' ? 'Reverse Dependency' : type === 'external-from-core' ? 'External from Core' : 'Cross-Layer Cycles'}</span>
-                </label>
-              ))}
-            </div>
-          )}
-
-          {/* Confidence slider */}
-          {minConfidence !== undefined && setMinConfidence && (
-            <div style={{ marginTop: 8, fontSize: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ fontWeight: 600, color: T.textMuted }}>Confidence threshold: {Math.round(minConfidence * 100)}%</div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="10"
-                value={Math.round(minConfidence * 100)}
-                onChange={handleConfidenceChange}
-                style={{ cursor: 'pointer', width: '100%' }}
-              />
-              <div style={{ fontSize: 9, color: T.textFaint }}>Only show violations with higher confidence</div>
-            </div>
-          )}
-
-          {showDetails && (
-            <div style={{ fontSize: 10, color: T.textFaint, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
-              <div style={{ marginBottom: 8, fontWeight: 600, color: T.textMuted }}>Architectural Violations — Scoring & Examples:</div>
-
-              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Reverse Dependency (High confidence)</div>
-                <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>service.ts → api.ts</span> (service → api violation)</div>
-                <div style={{ marginBottom: 2, color: T.textFaint }}>90% confidence: Strong violation of dependency flow</div>
-                <div style={{ marginBottom: 4, color: T.textFaint }}>Why bad: Inner layers shouldn't import from outer layers</div>
-                <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Use dependency injection or interfaces</div>
-              </div>
-
-              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Note: Type Import (Low confidence)</div>
-                <div style={{ marginBottom: 2 }}><span style={{ color: T.orange, fontWeight: 600 }}>service.ts → types.ts</span> (importing types is OK)</div>
-                <div style={{ marginBottom: 2, color: T.textFaint }}>30% confidence: Likely false positive for type-only imports</div>
-                <div style={{ marginBottom: 4, color: T.textFaint }}>Suppressed: Type imports don't create true runtime coupling</div>
-                <div style={{ color: T.green, fontWeight: 500 }}>Use: {'import type { T } from \'...\''}</div>
-              </div>
-
-              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Note: Safe External Lib (Ignored)</div>
-                <div style={{ marginBottom: 2 }}><span style={{ color: T.orange, fontWeight: 600 }}>domain.ts → date-fns</span> (safe utility library)</div>
-                <div style={{ marginBottom: 2, color: T.textFaint }}>Not flagged: Utility libs (lodash, zod, date-fns) are allowed</div>
-                <div style={{ marginBottom: 4, color: T.textFaint }}>Common safe libs: date-fns, zod, uuid, lodash, chalk</div>
-              </div>
-
-              <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: External Dependency from Core</div>
-                <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>domain.ts → custom-vendor-lib</span> (framework coupling)</div>
-                <div style={{ marginBottom: 2, color: T.textFaint }}>80% confidence: Core shouldn't depend on non-standard libs</div>
-                <div style={{ marginBottom: 4, color: T.textFaint }}>Why bad: Couples business logic to specific vendors</div>
-                <div style={{ color: T.green, fontWeight: 500 }}>Recommended: infrastructure.ts → vendor-lib → domain.ts (adapter pattern)</div>
-              </div>
-
-              <div>
-                <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Cross-Layer Cycles (Highest severity)</div>
-                <div style={{ marginBottom: 2 }}><span style={{ color: T.red, fontWeight: 600 }}>service.ts ↔ repository.ts</span> (circular across layers)</div>
-                <div style={{ marginBottom: 2, color: T.textFaint }}>95% confidence: Real architectural problem, high severity</div>
-                <div style={{ color: T.textFaint }}>Why bad: Makes testing impossible, hides true dependencies</div>
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div style={{ padding: '8px 14px', fontSize: 11, color: T.textMuted }}>
-          <div style={{ display: 'flex', gap: 14, alignItems: 'center', marginBottom: showDetails ? 8 : 0 }}>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.green, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Healthy ≥8</span>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.yellow, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Warning ≥6</span>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.orange, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Degraded ≥4</span>
-            <span><span style={{ display: 'inline-block', width: 12, height: 12, background: T.red, borderRadius: 2, verticalAlign: 'middle', marginRight: 4 }} />Critical &lt;4</span>
-          </div>
-          {showDetails && (
-            <div style={{ fontSize: 10, color: T.textFaint, marginTop: 10, paddingTop: 10, borderTop: `1px solid ${T.border}` }}>
-              {hasTs && (
-                <div style={{ marginBottom: 12 }}>
-                  <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 6 }}>React/TypeScript — Code Patterns:</div>
-                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Too Many Hooks</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>5+ hook calls in one component (useState, useEffect, etc.)</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: ≤ 3–5 hooks, extract rest to custom hooks</div>
-                  </div>
-                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Missing Key Props</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>{`items.map(item => <div>{item.name}</div>)`} — no key</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>{`✓ Correct: <div key={item.id}>`}</div>
-                  </div>
-                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Inline Event Handlers</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>{`<button onClick={() => setState(x + 1)}>`} creates new function on every render</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: useCallback or named function</div>
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Any Type</div>
-                    <div style={{ color: T.textFaint }}>Unsafe: bypasses TypeScript safety</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: explicit types or `unknown`</div>
-                  </div>
-                </div>
-              )}
-              {hasCsharp && (
-                <div>
-                  <div style={{ fontWeight: 600, color: T.textMuted, marginBottom: 6 }}>C#/.NET — Code Patterns:</div>
-                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: God Class</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>Classes with 20+ methods doing many unrelated tasks</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: ≤ 20 methods, each with single responsibility</div>
-                  </div>
-                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Long Methods</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>{'Methods >50 lines hard to test and reason about'}</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Extract logic into smaller, focused methods</div>
-                  </div>
-                  <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${T.border}` }}>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Tight Coupling</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>Constructor with 5+ parameters (OrderService, PaymentService, LogService...)</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Use config object or DI container</div>
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 500, color: T.accent, marginBottom: 2 }}>Anti-pattern: Empty Catch Blocks</div>
-                    <div style={{ marginBottom: 2, color: T.textFaint }}>Silently swallows exceptions, hides bugs</div>
-                    <div style={{ color: T.green, fontWeight: 500 }}>Recommended: Log, handle, or re-throw with context</div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-      <button
-        onClick={handleToggleDetails}
-        style={{
-          width: '100%', padding: '6px 0', background: 'transparent',
-          border: `1px solid ${T.border}`, borderTop: showDetails ? 'none' : undefined,
-          borderRadius: showDetails ? '0 0 8px 8px' : 0,
-          color: T.textDim, fontSize: 10, cursor: 'pointer',
-          transition: 'all 0.2s',
-        }}
-        onMouseEnter={handleDetailsMouseEnter}
-        onMouseLeave={handleDetailsMouseLeave}
-      >
-        {showDetails ? 'Hide pattern details' : 'Show pattern details'}
-      </button>
     </div>
   );
 }
 
 function ZoomBtn({ label, onClick, T }: { label: string; onClick: () => void; T: ReturnType<typeof useTheme>['T'] }) {
-  function handleMouseEnter(e: React.MouseEvent<HTMLButtonElement>) {
-    e.currentTarget.style.background = T.cardBgHover;
-    e.currentTarget.style.borderColor = T.borderBright;
-  }
-  function handleMouseLeave(e: React.MouseEvent<HTMLButtonElement>) {
-    e.currentTarget.style.background = T.panelHover;
-    e.currentTarget.style.borderColor = T.border;
-  }
   return (
     <button
       onClick={onClick}
@@ -1150,8 +530,6 @@ function ZoomBtn({ label, onClick, T }: { label: string; onClick: () => void; T:
         background: T.panel, border: `1px solid ${T.border}`,
         borderRadius: 6, color: T.textMuted, cursor: 'pointer', fontSize: 16,
       }}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
     >
       {label}
     </button>

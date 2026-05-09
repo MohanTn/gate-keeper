@@ -1,20 +1,6 @@
 import React, { useCallback, useEffect, useState, memo } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
-import { ThemeTokens, useTheme } from '../ThemeContext';
-
-function rc(r: number, T: ThemeTokens) {
-  if (r >= 8) return T.green;
-  if (r >= 6) return T.yellow;
-  if (r >= 4) return T.orange;
-  return T.red;
-}
-
-function healthLabel(r: number) {
-  if (r >= 8) return 'Healthy';
-  if (r >= 6) return 'Warning';
-  if (r >= 4) return 'Degraded';
-  return 'Critical';
-}
+import { ThemeTokens, useTheme, ratingColor, healthLabel } from '../ThemeContext';
 
 // ── Props ──────────────────────────────────────────────────
 interface DetailPanelProps {
@@ -63,7 +49,6 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
 
   return (
     <div
-      className="slide-in-right"
       style={{
         position: 'absolute', top: 0, right: 0, bottom: 0,
         width: 420, background: T.panel, borderLeft: `1px solid ${T.border}`,
@@ -105,7 +90,7 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '14px 0', borderBottom: `1px solid ${T.border}` }}>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
             <span style={{ fontSize: 13, color: T.textMuted }}>Rating:</span>
-            <span style={{ fontSize: 15, fontWeight: 600, color: rc(node.rating, T) }}>{node.rating} / 10</span>
+            <span style={{ fontSize: 15, fontWeight: 600, color: ratingColor(node.rating, T) }}>{node.rating} / 10</span>
             <span style={{ fontSize: 12, color: T.textMuted }}>({healthLabel(node.rating)})</span>
           </div>
           {detail?.gitDiff ? (
@@ -166,7 +151,7 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
                   paddingTop: 8, marginTop: 4, borderTop: `2px solid ${T.borderBright}`,
                 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: T.text }}>Final</span>
-                  <span style={{ fontSize: 15, fontWeight: 800, color: rc(node.rating, T) }}>{node.rating}</span>
+                  <span style={{ fontSize: 15, fontWeight: 800, color: ratingColor(node.rating, T) }}>{node.rating}</span>
                 </div>
               </div>
             )}
@@ -366,7 +351,7 @@ function DepRow({ label, rating, clickable, onClick }: {
     >
       <span>→ {label}</span>
       {rating != null && (
-        <span style={{ fontSize: 12, fontWeight: 600, color: rc(rating, T) }}>{rating}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: ratingColor(rating, T) }}>{rating}</span>
       )}
     </div>
   );

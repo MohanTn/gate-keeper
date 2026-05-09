@@ -4,7 +4,7 @@ import { ScanProgressBar } from './components/HeaderWidgets';
 import { AppContent, RepoOverlay } from './components/AppContent';
 import { GraphErrorBoundary } from './components/ErrorBoundary';
 import { useTheme } from './ThemeContext';
-import { useRepoSelection, useNodeHandlers, useSearchUI, usePanelActions, useArchConfig, useGraphData, useAppMetrics } from './hooks';
+import { useRepoSelection, useNodeHandlers, useSearchUI, usePanelActions, useGraphData, useAppMetrics } from './hooks';
 
 export default function App() {
     const { T } = useTheme();
@@ -13,7 +13,6 @@ export default function App() {
     const { selectedNode, handleClearSelection, handleNodeSelect } = useNodeHandlers(filteredGraphData);
     const { searchQuery, searchRef, searchResults, showSearchDropdown, handleSearchSelect, handleSearchChange, handleSearchFocus, handleSearchBlur, handleSearchKeyDown } = useSearchUI(filteredGraphData.nodes, handleNodeSelect);
     const { showFileList, showFilterPanel, showViolationsPanel, handleShowRepoSelector, handleFileListOpen, handleFileListSelect, handleFileListClose, handleToggleFilterPanel, handleCloseFilterPanel, handleToggleViolationsPanel, handleCloseViolationsPanel, handleClear } = usePanelActions(handleClearSelection, handleNodeSelect, setShowRepoSelector, filteredGraphData, setScanning, setLastScan, selectedRepo, repos);
-    const archConfig = useArchConfig(selectedRepo);
 
     const { totalViolations, overallRating, currentRepoLabel, scanPct } = useAppMetrics(filteredGraphData, selectedRepo, repos, scanProgress);
 
@@ -40,7 +39,7 @@ export default function App() {
                     graphData={graphData} selectedNode={selectedNode} showFileList={showFileList}
                     showFilterPanel={showFilterPanel} showViolationsPanel={showViolationsPanel}
                     selectedRepo={selectedRepo} patterns={patterns} scanExcludePatterns={scanExcludePatterns}
-                    archConfig={archConfig} wsStatus={wsStatus}
+                    wsStatus={wsStatus}
                     onNodeSelect={handleNodeSelect} onCanvasClick={handleClearSelection}
                     onFileListSelect={handleFileListSelect} onFileListClose={handleFileListClose}
                     onFilterClose={handleCloseFilterPanel} onViolationsClose={handleCloseViolationsPanel}

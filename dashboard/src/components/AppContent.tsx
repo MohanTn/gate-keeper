@@ -5,7 +5,7 @@ import { FileListDrawer } from './FileListDrawer';
 import { ViolationsPanel } from './ViolationsPanel';
 import { FilterPanel } from './FilterPanel';
 import { RepoSelectorModal } from './RepoSelector';
-import { GraphData, RepoInfo, ExcludePattern, ArchMapping } from '../types';
+import { GraphData, RepoInfo, ExcludePattern } from '../types';
 import { ThemeTokens } from '../ThemeContext';
 
 interface ScanExcludePatterns {
@@ -26,7 +26,6 @@ interface AppContentProps {
     selectedRepo: string | null;
     patterns: ExcludePattern[];
     scanExcludePatterns: ScanExcludePatterns | null;
-    archConfig?: ArchMapping | null;
     wsStatus: 'connecting' | 'connected' | 'disconnected';
     onNodeSelect: (node: GraphData['nodes'][number]) => void;
     onCanvasClick: () => void;
@@ -43,7 +42,7 @@ interface AppContentProps {
 export function AppContent({
     repoLoading, scanning, filteredGraphData, graphData, selectedNode,
     showFileList, showFilterPanel, showViolationsPanel, selectedRepo,
-    patterns, scanExcludePatterns, archConfig, wsStatus,
+    patterns, scanExcludePatterns, wsStatus,
     onNodeSelect, onCanvasClick, onFileListSelect, onFileListClose,
     onFilterClose, onViolationsClose, onAddPattern, onRemovePattern,
     onScanAll, T,
@@ -157,7 +156,6 @@ export function AppContent({
                 selectedRepo={selectedRepo}
                 focusNodeId={selectedNode?.id}
                 scanning={scanning}
-                archConfig={archConfig}
             />
             {selectedNode && !showFilterPanel && (
                 <DetailPanel node={selectedNode} graphData={filteredGraphData} onClose={onCanvasClick} onNodeSelect={onNodeSelect} selectedRepo={selectedRepo} />
