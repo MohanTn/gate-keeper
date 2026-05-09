@@ -1,23 +1,11 @@
 import { GraphData, GraphNode, GraphEdge } from '../types';
-import { ThemeTokens, darkTokens } from '../ThemeContext';
-import { isTestFile } from './arch-rendering';
+import { ThemeTokens, darkTokens, ratingColor, healthLabel } from '../ThemeContext';
 
 // Default T for backward compat — components should pass theme explicitly
 export const T = darkTokens;
 
-export function healthColor(r: number, theme: ThemeTokens = T): string {
-    if (r >= 8) return theme.green;
-    if (r >= 6) return theme.yellow;
-    if (r >= 4) return theme.orange;
-    return theme.red;
-}
-
-export function healthLabel(r: number): string {
-    if (r >= 8) return 'Healthy';
-    if (r >= 6) return 'Warning';
-    if (r >= 4) return 'Degraded';
-    return 'Critical';
-}
+// Re-export ratingColor as healthColor for backward compat
+export const healthColor = ratingColor;
 
 export function buildTooltip(node: GraphNode): string {
     const h = healthLabel(node.rating);
@@ -40,28 +28,24 @@ export function buildVisNodes(
     pinned: Map<string, { x: number; y: number }>,
     treePositions: Map<string, { x: number; y: number }>,
     theme: ThemeTokens = T,
-    archMode: boolean = false,
 ): any[] {
     // For large graphs without layout positions, use a grid scatter
     const needsScatter = treePositions.size === 0 && nodes.length > 200;
     const cols = needsScatter ? Math.ceil(Math.sqrt(nodes.length)) : 0;
 
     return nodes.map((node, i) => {
-        const color = healthColor(node.rating, theme);
+        const color = ratingColor(node.rating, theme);
         const scatterPos = needsScatter
             ? { x: (i % cols) * 220, y: Math.floor(i / cols) * 100 }
             : { x: 0, y: 0 };
         const pos = pinned.get(node.id) ?? treePositions.get(node.id) ?? scatterPos;
-        const isTest = archMode && isTestFile(node.id);
-        const label = isTest ? `[test] ${node.label}` : node.label;
         return {
             id: node.id,
-            label,
+            label: node.label,
             x: pos.x, y: pos.y,
             title: buildTooltip(node),
             shape: 'box',
             color: makeNodeColor(color, theme),
-            opacity: isTest ? 0.7 : 1,
             font: { color: theme.text, size: 15, face: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' },
             borderWidth: 2,
             borderWidthSelected: 3,

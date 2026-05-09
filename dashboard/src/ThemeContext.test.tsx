@@ -201,15 +201,15 @@ describe('ThemeContext', () => {
 
   describe('Theme token validation', () => {
     it('should have correct dark tokens', () => {
-      expect(darkTokens.bg).toBe('#0B1120');
-      expect(darkTokens.panel).toBe('#111827');
-      expect(darkTokens.text).toBe('#F1F5F9');
+      expect(darkTokens.bg).toBe('#1C1B29');
+      expect(darkTokens.panel).toBe('#252339');
+      expect(darkTokens.text).toBe('#E2DFF2');
     });
 
     it('should have correct light tokens', () => {
-      expect(lightTokens.bg).toBe('#F8FAFC');
+      expect(lightTokens.bg).toBe('#F7F3FF');
       expect(lightTokens.panel).toBe('#FFFFFF');
-      expect(lightTokens.text).toBe('#0F172A');
+      expect(lightTokens.text).toBe('#2D2740');
     });
   });
 });
@@ -217,15 +217,15 @@ describe('ThemeContext', () => {
 describe('ThemeContext Toggle', () => {
   describe('Theme tokens', () => {
     it('should have correct dark tokens', () => {
-      expect(darkTokens.bg).toBe('#0B1120');
-      expect(darkTokens.panel).toBe('#111827');
-      expect(darkTokens.text).toBe('#F1F5F9');
+      expect(darkTokens.bg).toBe('#1C1B29');
+      expect(darkTokens.panel).toBe('#252339');
+      expect(darkTokens.text).toBe('#E2DFF2');
     });
 
     it('should have correct light tokens', () => {
-      expect(lightTokens.bg).toBe('#F8FAFC');
+      expect(lightTokens.bg).toBe('#F7F3FF');
       expect(lightTokens.panel).toBe('#FFFFFF');
-      expect(lightTokens.text).toBe('#0F172A');
+      expect(lightTokens.text).toBe('#2D2740');
     });
   });
 });

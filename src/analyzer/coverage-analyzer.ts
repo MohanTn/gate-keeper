@@ -54,6 +54,8 @@ export class CoverageAnalyzer {
      */
     async checkCoverage(filePath: string): Promise<CoverageResult | null> {
         if (this.isTestFile(filePath)) return null;
+        if (this.isConfigFile(filePath)) return null;
+        if (this.isExcludedFromCoverage(filePath)) return null;
 
         const projectRoot = this.findProjectRoot(filePath);
         if (!projectRoot) return null;
@@ -481,11 +483,56 @@ export class CoverageAnalyzer {
 
     /** Patterns that identify test/spec files. */
     private static readonly TEST_PATTERNS = [
+        // JS/TS conventions
         /\.test\.[jt]sx?$/,
         /\.spec\.[jt]sx?$/,
         /__tests__\//,
         /\.tests\.[jt]sx?$/,
         /\.specs\.[jt]sx?$/,
+        // C# conventions: *Test.cs, *Tests.cs, *.Test.cs, *.Tests.cs
+        /Tests?\.cs$/i,
+        /\.Tests?\.cs$/i,
+    ];
+
+    /**
+     * Patterns that identify config / build / tooling files that do not need
+     * unit test coverage. Matched against the file basename.
+     */
+    private static readonly CONFIG_FILE_PATTERNS = [
+        /^jest\.config\./,
+        /^vitest\.config\./,
+        /^vite\.config\./,
+        /^next\.config\./,
+        /^playwright\.config\./,
+        /^cypress\.config\./,
+        /^webpack\.config\./,
+        /^rollup\.config\./,
+        /^rspack\.config\./,
+        /^\.eslintrc/,
+        /^\.prettierrc/,
+        /^prettier\.config\./,
+        /^babel\.config\./,
+        /^postcss\.config\./,
+        /^tailwind\.config\./,
+        /^tsconfig/,
+        /^typedoc/,
+        /^package\.json$/,
+        /^\.editorconfig$/,
+        /^\.gitattributes$/,
+        /^\.gitignore$/,
+        /^\.dockerignore$/,
+        /^\.nvmrc$/,
+        /^\.npmrc$/,
+        /^lerna\.json$/,
+        /^nx\.json$/,
+        /^turbo\.json$/,
+        /^commitlint\.config\./,
+        /^\.commitlintrc/,
+        /^lint-staged\.config\./,
+        /^\.lintstagedrc/,
+        /^stylelint\.config\./,
+        /^\.stylelintrc/,
+        /^\.markdownlint/,
     ];
 
     /**
@@ -494,6 +541,29 @@ export class CoverageAnalyzer {
     private isTestFile(filePath: string): boolean {
         const normalized = filePath.replace(/\\/g, '/');
         return CoverageAnalyzer.TEST_PATTERNS.some(p => p.test(normalized));
+    }
+
+    /**
+     * Returns true if the file is a config/build/tooling file that should not
+     * require unit test coverage.
+     */
+    private isConfigFile(filePath: string): boolean {
+        const basename = path.basename(filePath);
+        return CoverageAnalyzer.CONFIG_FILE_PATTERNS.some(p => p.test(basename));
+    }
+
+    /**
+     * Returns true when a C# file carries the [ExcludeFromCodeCoverage] attribute,
+     * indicating that the author intentionally exempted it from coverage requirements.
+     */
+    private isExcludedFromCoverage(filePath: string): boolean {
+        if (!filePath.endsWith('.cs')) return false;
+        try {
+            const content = fs.readFileSync(filePath, 'utf8');
+            return /\[ExcludeFromCodeCoverage(?:Attribute)?(?:\s*\([^)]*\))?\]/.test(content);
+        } catch {
+            return false;
+        }
     }
 
     /**
@@ -513,6 +583,14 @@ export class CoverageAnalyzer {
         for (const suffix of testSuffixes) {
             for (const testExt of testExts) {
                 const candidate = path.join(dir, `${baseName}${suffix}${testExt}`);
+                if (fs.existsSync(candidate)) return candidate;
+            }
+        }
+
+        // 1b. Sibling C# conventions: *Test.cs, *Tests.cs, *.Test.cs, *.Tests.cs
+        if (ext === '.cs') {
+            for (const suffix of ['Test', 'Tests', '.Test', '.Tests']) {
+                const candidate = path.join(dir, `${baseName}${suffix}${ext}`);
                 if (fs.existsSync(candidate)) return candidate;
             }
         }

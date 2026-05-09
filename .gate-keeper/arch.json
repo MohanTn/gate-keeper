@@ -120,7 +120,7 @@
     "dashboard/src/components/ViolationsPanel.test.tsx": "interface",
     "dashboard/src/components/ViolationsPanel.tsx": "interface",
     "dashboard/src/components/VisGraphView.test.tsx": "interface",
-    "dashboard/src/components/VisGraphView.tsx": "interface",
+    "dashboard/src/components/VisGraphView.tsx": "unknown",
     "dashboard/src/components/arch-layers.ts": "interface",
     "dashboard/src/components/graph-utils.test.ts": "interface",
     "dashboard/src/components/graph-utils.ts": "interface",

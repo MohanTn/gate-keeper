@@ -1,6 +1,6 @@
 import React, { Component, ErrorInfo, useCallback } from 'react';
 import { GraphData, GraphNode } from '../types';
-import { ThemeTokens } from '../ThemeContext';
+import { ThemeTokens, ratingColor, healthLabel } from '../ThemeContext';
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -48,20 +48,6 @@ export class GraphErrorBoundary extends Component<ErrorBoundaryProps, ErrorBound
   }
 }
 
-function healthColor(r: number, T: ThemeTokens): string {
-  if (r >= 8) return T.green;
-  if (r >= 6) return T.yellow;
-  if (r >= 4) return T.orange;
-  return T.red;
-}
-
-function healthLabel(r: number): string {
-  if (r >= 8) return 'Healthy';
-  if (r >= 6) return 'Warning';
-  if (r >= 4) return 'Degraded';
-  return 'Critical';
-}
-
 function FallbackTable({
   data, onNodeSelect, T, error, onRetry,
 }: {
@@ -101,7 +87,7 @@ function FallbackTable({
 
       <div style={{ display: 'flex', gap: 16, marginBottom: 20 }}>
         <StatBox label="Files" value={nodes.length} color={T.text} T={T} />
-        <StatBox label="Avg Rating" value={avgRating} color={avgRating !== '—' ? healthColor(Number(avgRating), T) : T.textFaint} T={T} />
+        <StatBox label="Avg Rating" value={avgRating} color={avgRating !== '—' ? ratingColor(Number(avgRating), T) : T.textFaint} T={T} />
         <StatBox label="Violations" value={totalViolations} color={totalViolations > 0 ? T.yellow : T.green} T={T} />
         <StatBox label="Errors" value={errorsCnt} color={errorsCnt > 0 ? T.red : T.green} T={T} />
       </div>
@@ -169,10 +155,10 @@ function TableRow({ node, T, onNodeSelect }: { node: GraphNode; T: ThemeTokens; 
         <div style={{ fontSize: 10, color: T.textFaint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 400 }}>{node.id}</div>
       </Td>
       <Td T={T} align="center">
-        <span style={{ fontWeight: 700, color: healthColor(node.rating, T) }}>{node.rating}</span>
+        <span style={{ fontWeight: 700, color: ratingColor(node.rating, T) }}>{node.rating}</span>
       </Td>
       <Td T={T} align="center">
-        <span style={{ fontSize: 11, fontWeight: 600, color: healthColor(node.rating, T), padding: '2px 8px', borderRadius: 3, background: `${healthColor(node.rating, T)}18`, border: `1px solid ${healthColor(node.rating, T)}40` }}>{healthLabel(node.rating)}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: ratingColor(node.rating, T), padding: '2px 8px', borderRadius: 3, background: `${ratingColor(node.rating, T)}18`, border: `1px solid ${ratingColor(node.rating, T)}40` }}>{healthLabel(node.rating)}</span>
       </Td>
       <Td T={T} align="right">{node.metrics.linesOfCode}</Td>
       <Td T={T} align="right">

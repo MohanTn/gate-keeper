@@ -366,12 +366,7 @@ export class TypeScriptAnalyzer {
   /**
    * Scans raw source text for TODO/FIXME/PLACEHOLDER markers and unimplemented
    * throw stubs. These represent incomplete work that should not pass quality gates.
-   *
-   * Severity tiers:
-   *   error   — throw new Error('Not implemented') — will crash at runtime
-   *   warning — TODO / FIXME / PLACEHOLDER / STUB  — incomplete work
-   *   info    — HACK / WORKAROUND / KLUDGE          — tracked technical debt
-   */
+  */
   private detectTodoPlaceholders(content: string): Violation[] {
     const violations: Violation[] = [];
     const lines = content.split('\n');

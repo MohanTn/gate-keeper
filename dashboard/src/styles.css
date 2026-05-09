@@ -7,40 +7,40 @@
 }
 
 :root {
-  --gk-bg: #0B1120;
-  --gk-panel: #111827;
-  --gk-panel-hover: #1A2332;
-  --gk-elevated: #0F172A;
-  --gk-border: #1E293B;
-  --gk-border-bright: #2D3F55;
-  --gk-text: #F1F5F9;
-  --gk-text-muted: #94A3B8;
-  --gk-text-faint: #64748B;
-  --gk-text-dim: #475569;
-  --gk-green: #22C55E;
-  --gk-yellow: #EAB308;
-  --gk-orange: #F97316;
-  --gk-red: #EF4444;
-  --gk-accent: #3B82F6;
+  --gk-bg: #1C1B29;
+  --gk-panel: #252339;
+  --gk-panel-hover: #2E2C47;
+  --gk-elevated: #211F32;
+  --gk-border: #343158;
+  --gk-border-bright: #45416B;
+  --gk-text: #E2DFF2;
+  --gk-text-muted: #A5A0C5;
+  --gk-text-faint: #7D78A0;
+  --gk-text-dim: #58547A;
+  --gk-green: #A8D5BA;
+  --gk-yellow: #EED9A0;
+  --gk-orange: #EDBC9B;
+  --gk-red: #E8A0A0;
+  --gk-accent: #AD9EFF;
 }
 
 [data-theme="light"],
 :root[data-theme="light"] {
-  --gk-bg: #F8FAFC;
+  --gk-bg: #F7F3FF;
   --gk-panel: #FFFFFF;
-  --gk-panel-hover: #EEF2FF;
-  --gk-elevated: #F1F5F9;
-  --gk-border: #CBD5E1;
-  --gk-border-bright: #94A3B8;
-  --gk-text: #0F172A;
-  --gk-text-muted: #334155;
-  --gk-text-faint: #475569;
-  --gk-text-dim: #64748B;
-  --gk-green: #16A34A;
-  --gk-yellow: #CA8A04;
-  --gk-orange: #EA580C;
-  --gk-red: #DC2626;
-  --gk-accent: #2563EB;
+  --gk-panel-hover: #EFEBF9;
+  --gk-elevated: #F2EDFC;
+  --gk-border: #DDD6EC;
+  --gk-border-bright: #C6BCDF;
+  --gk-text: #2D2740;
+  --gk-text-muted: #6C6385;
+  --gk-text-faint: #9288AD;
+  --gk-text-dim: #B5ABCC;
+  --gk-green: #7DA08A;
+  --gk-yellow: #C9B060;
+  --gk-orange: #C9905A;
+  --gk-red: #C97A75;
+  --gk-accent: #8579E8;
 }
 
 body {
@@ -55,8 +55,8 @@ body {
 
 [data-theme="light"] body,
 :root[data-theme="light"] body {
-  background: #F8FAFC;
-  color: #0F172A;
+  background: #F7F3FF;
+  color: #2D2740;
 }
 
 /* Typography scale — use these instead of inline fontSize/fontWeight literals */
@@ -77,20 +77,20 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1E293B;
+  background: #45416B;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #5A5590;
 }
 
 [data-theme="light"] ::-webkit-scrollbar-thumb {
-  background: #CBD5E1;
+  background: #C6BCDF;
 }
 
 [data-theme="light"] ::-webkit-scrollbar-thumb:hover {
-  background: #94A3B8;
+  background: #B5ABCC;
 }
 
 /* Functional animations only — panels open instantly */
@@ -104,11 +104,6 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
-
-/* Legacy class names retained as no-ops so existing JSX className references compile.
-   The boring-pro design opens panels instantly with no slide/fade. */
-.slide-in-right { animation: none; }
-.fade-in { animation: none; }
 
 .search-result-item:hover {
   background: var(--gk-panel-hover);
