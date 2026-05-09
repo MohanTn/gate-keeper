@@ -41,13 +41,14 @@ function PresetButton({ preset, active, onAdd, patterns }: {
 
 function PatternItem({ pattern, onRemove }: { pattern: ExcludePattern; onRemove: (id: number) => void }) {
     const { T } = useTheme();
+    const handleRemove = useCallback(() => onRemove(pattern.id), [pattern.id, onRemove]);
     return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderRadius: 6, background: T.panel, border: `1px solid ${T.border}` }}>
             <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 12, color: T.text, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pattern.pattern}</div>
                 {pattern.label && <div style={{ fontSize: 10, color: T.textDim, marginTop: 1 }}>{pattern.label}</div>}
             </div>
-            <button onClick={() => onRemove(pattern.id)} style={{ background: 'none', border: `1px solid ${T.border}`, color: T.textMuted, cursor: 'pointer', fontSize: 11, padding: '2px 8px', borderRadius: 4, marginLeft: 8, flexShrink: 0 }} title="Remove pattern">Remove</button>
+            <button onClick={handleRemove} style={{ background: 'none', border: `1px solid ${T.border}`, color: T.textMuted, cursor: 'pointer', fontSize: 11, padding: '2px 8px', borderRadius: 4, marginLeft: 8, flexShrink: 0 }} title="Remove pattern">Remove</button>
         </div>
     );
 }

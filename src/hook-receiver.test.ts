@@ -1,650 +1,770 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as http from 'http';
-import { spawn, spawnSync } from 'child_process';
+// ── WARNING: Do NOT import http or child_process at top level ──────
+// jest.resetModules() re-creates mocked module instances, making
+// top-level imports stale. Always require() fresh copies below.
+// ──────────────────────────────────────────────────────────────────
 
-// Mock the daemon HTTP call
-jest.mock('http', () => ({
-  request: jest.fn((options: any, callback: any) => {
-    const mockReq = {
-      on: jest.fn(),
-      write: jest.fn(),
-      end: jest.fn(),
-      destroy: jest.fn(),
-      setTimeout: jest.fn(),
-    };
-    return mockReq;
-  }),
-}));
+// ── Shared mock state ──────────────────────────────────────────────
+// Survives jest.resetModules() because it's defined in module scope.
+const httpMock = {
+  responseData: '',
+  shouldError: false,
+  shouldTimeout: false,
+};
 
-// Mock child_process
+jest.mock('http', () => ({ request: jest.fn() }));
 jest.mock('child_process', () => ({
-  spawn: jest.fn(() => ({
-    unref: jest.fn(),
-  })),
-  spawnSync: jest.fn(() => ({
-    status: 0,
-    stdout: '/test/repo',
-  })),
+  spawn: jest.fn(() => ({ unref: jest.fn() })),
+  spawnSync: jest.fn(() => ({ status: 0, stdout: '/test/repo' })),
 }));
 
-// Mock process.stdin to prevent open handles
-beforeAll(() => {
-  jest.spyOn(process.stdin, 'setEncoding').mockImplementation(() => process.stdin);
-  jest.spyOn(process.stdin, 'on').mockImplementation(() => process.stdin);
-  jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
-  jest.spyOn(process, 'exit').mockImplementation((() => {}) as any);
-});
+// ── Process mocks (independent of module registry) ─────────────────
+function mockStdinOn(handler: (event: string, fn: Function) => void) {
+  (process.stdin.on as any) = jest.fn(handler);
+}
+
+function mockStdoutWrite() {
+  (process.stdout.write as any) = jest.fn(() => true);
+}
+
+function mockProcessExit() {
+  (process.exit as any) = jest.fn((() => {}) as any);
+}
+
+/** Override http.request to stream httpMock data through callbacks */
+function setupHttpRequest(httpModule: any) {
+  httpModule.request.mockImplementation((_options: any, callback?: any) => {
+    if (httpMock.shouldError) {
+      const req = {
+        on: jest.fn((e: string, h: any) => { if (e === 'error') setTimeout(h, 0); return req; }),
+        write: jest.fn(), end: jest.fn(), destroy: jest.fn(), setTimeout: jest.fn(),
+      } as any;
+      return req;
+    }
+    if (httpMock.shouldTimeout) {
+      const req = {
+        on: jest.fn(), write: jest.fn(), end: jest.fn(), destroy: jest.fn(),
+        setTimeout: jest.fn((_: number, h: any) => { setTimeout(() => { h(); req.destroy(); }, 0); }),
+      } as any;
+      return req;
+    }
+    const res = {
+      setEncoding: jest.fn(),
+      on: jest.fn((e: string, h: any) => {
+        if (e === 'data') setTimeout(() => h(httpMock.responseData), 0);
+        if (e === 'end') setTimeout(h, 0);
+        return res;
+      }),
+    } as any;
+    if (callback) setTimeout(() => callback(res), 0);
+    return {
+      on: jest.fn(), write: jest.fn(), end: jest.fn(), destroy: jest.fn(), setTimeout: jest.fn(),
+    };
+  });
+}
 
 afterAll(() => {
   jest.restoreAllMocks();
   jest.resetModules();
 });
 
-describe('hook-receiver helpers', () => {
-  describe('globToRegex', () => {
-    it('should convert simple glob pattern to regex', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('*.ts');
-
-      expect(re.test('foo.ts')).toBe(true);
-      expect(re.test('foo.js')).toBe(false);
-      // Single * does not match across directories, but the regex matches partial paths
-      // so src/foo.ts will match because foo.ts matches *.ts
-      expect(re.test('src/foo.ts')).toBe(true);
-    });
-
-    it('should convert ** globstar pattern to regex', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('**/*.test.ts');
-
-      expect(re.test('foo.test.ts')).toBe(true);
-      expect(re.test('src/foo.test.ts')).toBe(true);
-      expect(re.test('src/deep/foo.test.ts')).toBe(true);
-    });
-
-    it('should escape special regex characters', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('*.config.ts');
-
-      expect(re.test('foo.config.ts')).toBe(true);
-      expect(re.test('fooXconfig.ts')).toBe(false);
-    });
-
-    it('should be case insensitive', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('*.TS');
-
-      expect(re.test('foo.ts')).toBe(true);
-      expect(re.test('foo.TS')).toBe(true);
-    });
-
-    it('should handle patterns starting with **/', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('**/node_modules/**');
-
-      expect(re.test('node_modules/foo')).toBe(true);
-      expect(re.test('src/node_modules/foo')).toBe(true);
-      expect(re.test('node_modules/pkg/index.js')).toBe(true);
-    });
-
-    it('should handle ** pattern for any path depth', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('**/*.generated.ts');
-
-      expect(re.test('foo.generated.ts')).toBe(true);
-      expect(re.test('src/foo.generated.ts')).toBe(true);
-      expect(re.test('a/b/c/foo.generated.ts')).toBe(true);
-    });
-
-    it('should handle exact file patterns', () => {
-      const { globToRegex } = require('./hook-receiver');
-      const re = globToRegex('*.Designer.cs');
-
-      expect(re.test('Form1.Designer.cs')).toBe(true);
-      expect(re.test('test.Designer.cs')).toBe(true);
-      expect(re.test('test.cs')).toBe(false);
-    });
-  });
-
-  describe('isFileExcludedByScanConfig', () => {
-    let mockConfig: any;
-    let originalExistsSync: any;
-
-    beforeEach(() => {
-      jest.resetModules();
-      mockConfig = {
-        scanExcludePatterns: {
-          global: ['**/node_modules/**', '**/dist/**'],
-          typescript: ['*.d.ts', '**/*.generated.ts'],
-          csharp: ['**/Migrations/*.cs', '*.Designer.cs'],
-        },
-      };
-
-      const mockFs = {
-        ...jest.requireActual('fs'),
-        existsSync: jest.fn((p: string) => {
-          if (p.endsWith('config.json')) return true;
-          return originalExistsSync ? originalExistsSync(p) : false;
-        }),
-        readFileSync: jest.fn((p: string) => {
-          if (p.endsWith('config.json')) return JSON.stringify(mockConfig);
-          return '';
-        }),
-      };
-      jest.doMock('fs', () => mockFs);
-    });
-
-    afterEach(() => {
-      jest.resetModules();
-    });
-
-    it('should exclude files matching global patterns', () => {
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-
-      expect(isFileExcludedByScanConfig('/src/node_modules/foo.ts', '.ts')).toBe(true);
-      expect(isFileExcludedByScanConfig('/src/dist/bundle.js', '.js')).toBe(true);
-    });
-
-    it('should exclude files matching typescript patterns', () => {
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-
-      expect(isFileExcludedByScanConfig('/src/types.d.ts', '.ts')).toBe(true);
-      expect(isFileExcludedByScanConfig('/src/api.generated.ts', '.ts')).toBe(true);
-    });
-
-    it('should exclude files matching csharp patterns', () => {
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-
-      expect(isFileExcludedByScanConfig('/src/Migrations/001_Init.cs', '.cs')).toBe(true);
-      expect(isFileExcludedByScanConfig('/src/Form1.Designer.cs', '.cs')).toBe(true);
-    });
-
-    it('should not exclude files not matching any pattern', () => {
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-
-      expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
-      expect(isFileExcludedByScanConfig('/src/Service.cs', '.cs')).toBe(false);
-    });
-
-    it('should return false when no config exists', () => {
-      const mockFs = {
-        ...jest.requireActual('fs'),
-        existsSync: jest.fn(() => false),
-      };
-      jest.doMock('fs', () => mockFs);
-
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-      expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
-
-      jest.resetModules();
-    });
-
-    it('should return false when config is malformed', () => {
-      const mockFs = {
-        ...jest.requireActual('fs'),
-        existsSync: jest.fn(() => true),
-        readFileSync: jest.fn(() => 'invalid json'),
-      };
-      jest.doMock('fs', () => mockFs);
-
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-      expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
-
-      jest.resetModules();
-    });
-
-    it('should handle missing language patterns gracefully', () => {
-      mockConfig = {
-        scanExcludePatterns: {
-          global: ['**/temp/**'],
-        },
-      };
-
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-      expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
-      expect(isFileExcludedByScanConfig('/temp/foo.ts', '.ts')).toBe(true);
-    });
-
-    it('should match patterns against both full path and filename', () => {
-      const { isFileExcludedByScanConfig } = require('./hook-receiver');
-
-      // Pattern *.d.ts should match filename regardless of path
-      expect(isFileExcludedByScanConfig('/src/types.d.ts', '.ts')).toBe(true);
-      expect(isFileExcludedByScanConfig('/types.d.ts', '.ts')).toBe(true);
-    });
-  });
-
-  describe('WATCHED_EXTENSIONS', () => {
-    it('should include TypeScript extensions', () => {
-      const { WATCHED_EXTENSIONS } = require('./hook-receiver');
-
-      expect(WATCHED_EXTENSIONS.has('.ts')).toBe(true);
-      expect(WATCHED_EXTENSIONS.has('.tsx')).toBe(true);
-      expect(WATCHED_EXTENSIONS.has('.jsx')).toBe(true);
-      expect(WATCHED_EXTENSIONS.has('.js')).toBe(true);
-    });
-
-    it('should include C# extension', () => {
-      const { WATCHED_EXTENSIONS } = require('./hook-receiver');
-
-      expect(WATCHED_EXTENSIONS.has('.cs')).toBe(true);
-    });
-
-    it('should not include unsupported extensions', () => {
-      const { WATCHED_EXTENSIONS } = require('./hook-receiver');
-
-      expect(WATCHED_EXTENSIONS.has('.py')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.java')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.go')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.rb')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.rs')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.php')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.css')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.html')).toBe(false);
-      expect(WATCHED_EXTENSIONS.has('.json')).toBe(false);
-    });
-  });
-});
-
-describe('hook-receiver session handling', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    jest.resetModules();
-  });
-
-  describe('session registration', () => {
-    it('should register session from UserPromptSubmit event', () => {
-      const payload = {
-        hook_event_name: 'UserPromptSubmit',
-        session_id: 'test-session-123',
-        cwd: '/test/workspace',
-      };
-
-      expect(payload.hook_event_name).toBe('UserPromptSubmit');
-      expect(payload.session_id).toBe('test-session-123');
-      expect(payload.cwd).toBe('/test/workspace');
-    });
-
-    it('should handle SessionStart event', () => {
-      const payload = {
-        hook_event_name: 'SessionStart',
-        session_id: 'new-session',
-        cwd: '/test/cwd',
-      };
-
-      expect(payload.hook_event_name).toBe('SessionStart');
-      expect(payload.session_id).toBeDefined();
-    });
-
-    it('should handle session_create event', () => {
-      const payload = {
-        hook_event_name: 'session_create',
-        tool_name: 'claude',
-        session_id: 'session-abc',
-        session_info: {
-          workspace_path: '/workspace',
-          git_root: '/workspace',
-          session_type: 'claude',
-        },
-      };
-
-      expect(payload.hook_event_name).toBe('session_create');
-      expect(payload.session_info.session_type).toBe('claude');
-    });
-
-    it('should handle session_create with all session_info fields', () => {
-      const payload = {
-        hook_event_name: 'session_create',
-        tool_name: 'vscode',
-        session_id: 'session-xyz',
-        session_info: {
-          workspace_path: '/workspace/project',
-          git_root: '/workspace',
-          session_type: 'copilot',
-        },
-      };
-
-      expect(payload.session_info.workspace_path).toBe('/workspace/project');
-      expect(payload.session_info.git_root).toBe('/workspace');
-      expect(payload.session_info.session_type).toBe('copilot');
-    });
-  });
-});
-
-describe('hook-receiver file analysis flow', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it('should skip non-watched file extensions', () => {
+// ── WATCHED_EXTENSIONS ─────────────────────────────────────────────
+describe('WATCHED_EXTENSIONS', () => {
+  it('should include TypeScript extensions', () => {
     const { WATCHED_EXTENSIONS } = require('./hook-receiver');
-    const unsupportedExts = ['.py', '.java', '.go', '.rb', '.rs', '.php', '.css', '.html', '.json', '.md'];
+    expect(WATCHED_EXTENSIONS.has('.ts')).toBe(true);
+    expect(WATCHED_EXTENSIONS.has('.tsx')).toBe(true);
+    expect(WATCHED_EXTENSIONS.has('.jsx')).toBe(true);
+    expect(WATCHED_EXTENSIONS.has('.js')).toBe(true);
+  });
 
-    for (const ext of unsupportedExts) {
+  it('should include C# extension', () => {
+    const { WATCHED_EXTENSIONS } = require('./hook-receiver');
+    expect(WATCHED_EXTENSIONS.has('.cs')).toBe(true);
+  });
+
+  it('should not include unsupported extensions', () => {
+    const { WATCHED_EXTENSIONS } = require('./hook-receiver');
+    for (const ext of ['.py', '.java', '.go', '.rb', '.rs', '.php', '.css', '.html', '.json']) {
       expect(WATCHED_EXTENSIONS.has(ext)).toBe(false);
     }
   });
+});
 
-  it('should process supported file extensions', () => {
-    const { WATCHED_EXTENSIONS } = require('./hook-receiver');
-    const supportedExts = ['.ts', '.tsx', '.jsx', '.js', '.cs'];
-
-    for (const ext of supportedExts) {
-      expect(WATCHED_EXTENSIONS.has(ext)).toBe(true);
-    }
+// ── globToRegex ────────────────────────────────────────────────────
+describe('globToRegex', () => {
+  it('should convert simple glob pattern to regex', () => {
+    const { globToRegex } = require('./hook-receiver');
+    const re = globToRegex('*.ts');
+    expect(re.test('foo.ts')).toBe(true);
+    expect(re.test('foo.js')).toBe(false);
+    expect(re.test('src/foo.ts')).toBe(true);
   });
 
-  it('should handle file paths with tool_input.file_path', () => {
-    const payload = {
-      tool_input: {
-        file_path: '/src/component.tsx',
-      },
-    };
-
-    const filePath = payload.tool_input?.file_path;
-    expect(filePath).toBe('/src/component.tsx');
+  it('should convert ** globstar pattern to regex', () => {
+    const { globToRegex } = require('./hook-receiver');
+    const re = globToRegex('**/*.test.ts');
+    expect(re.test('foo.test.ts')).toBe(true);
+    expect(re.test('src/foo.test.ts')).toBe(true);
+    expect(re.test('src/deep/foo.test.ts')).toBe(true);
   });
 
-  it('should handle file paths with tool_input.path', () => {
-    const payload = {
-      tool_input: {
-        path: '/src/service.cs',
-      },
-    };
-
-    const filePath = payload.tool_input?.path;
-    expect(filePath).toBe('/src/service.cs');
+  it('should escape special regex characters', () => {
+    const { globToRegex } = require('./hook-receiver');
+    const re = globToRegex('*.config.ts');
+    expect(re.test('foo.config.ts')).toBe(true);
+    expect(re.test('fooXconfig.ts')).toBe(false);
   });
 
-  it('should handle payloads with both file_path and path (file_path takes precedence)', () => {
-    const payload = {
-      tool_input: {
-        file_path: '/src/component.tsx',
-        path: '/src/other.js',
-      },
-    };
-
-    const filePath = payload.tool_input?.file_path ?? payload.tool_input?.path;
-    expect(filePath).toBe('/src/component.tsx');
+  it('should be case insensitive', () => {
+    const { globToRegex } = require('./hook-receiver');
+    const re = globToRegex('*.TS');
+    expect(re.test('foo.ts')).toBe(true);
+    expect(re.test('foo.TS')).toBe(true);
   });
 
-  it('should handle payloads with undefined tool_input', () => {
-    const payload = {} as any;
-    const filePath = payload.tool_input?.file_path ?? payload.tool_input?.path;
-    expect(filePath).toBeUndefined();
+  it('should handle patterns starting with **/', () => {
+    const { globToRegex } = require('./hook-receiver');
+    const re = globToRegex('**/node_modules/**');
+    expect(re.test('node_modules/foo')).toBe(true);
+    expect(re.test('src/node_modules/foo')).toBe(true);
+  });
+
+  it('should handle exact file patterns', () => {
+    const { globToRegex } = require('./hook-receiver');
+    const re = globToRegex('*.Designer.cs');
+    expect(re.test('Form1.Designer.cs')).toBe(true);
+    expect(re.test('test.cs')).toBe(false);
   });
 });
 
-describe('hook-receiver exit codes', () => {
-  it('should exit with code 2 when rating is below minimum', () => {
-    const minRating = 6.5;
-    const fileRating = 4.0;
+// ── isFileExcludedByScanConfig ─────────────────────────────────────
+describe('isFileExcludedByScanConfig', () => {
+  let mockConfig: any;
 
-    expect(fileRating).toBeLessThan(minRating);
+  beforeEach(() => {
+    mockConfig = {
+      scanExcludePatterns: {
+        global: ['**/node_modules/**', '**/dist/**'],
+        typescript: ['*.d.ts', '**/*.generated.ts'],
+        csharp: ['**/Migrations/*.cs', '*.Designer.cs'],
+      },
+    };
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn((p: string) => p.endsWith('config.json')),
+      readFileSync: jest.fn((p: string) => {
+        if (p.endsWith('config.json')) return JSON.stringify(mockConfig);
+        return '';
+      }),
+    }));
   });
 
-  it('should continue when rating meets minimum', () => {
-    const minRating = 6.5;
-    const fileRating = 8.0;
-
-    expect(fileRating).toBeGreaterThanOrEqual(minRating);
+  it('should exclude files matching global patterns', () => {
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/node_modules/foo.ts', '.ts')).toBe(true);
+    expect(isFileExcludedByScanConfig('/src/dist/bundle.js', '.js')).toBe(true);
   });
 
-  it('should handle edge case when rating equals minimum', () => {
-    const minRating = 6.5;
-    const fileRating = 6.5;
+  it('should exclude files matching typescript patterns', () => {
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/types.d.ts', '.ts')).toBe(true);
+    expect(isFileExcludedByScanConfig('/src/api.generated.ts', '.ts')).toBe(true);
+  });
 
-    expect(fileRating).toBeGreaterThanOrEqual(minRating);
+  it('should exclude files matching csharp patterns', () => {
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/Migrations/001_Init.cs', '.cs')).toBe(true);
+    expect(isFileExcludedByScanConfig('/src/Form1.Designer.cs', '.cs')).toBe(true);
+  });
+
+  it('should not exclude files not matching any pattern', () => {
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
+    expect(isFileExcludedByScanConfig('/src/Service.cs', '.cs')).toBe(false);
+  });
+
+  it('should return false when no config exists', () => {
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn(() => false),
+    }));
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
+  });
+
+  it('should return false when config is malformed', () => {
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn(() => true),
+      readFileSync: jest.fn(() => 'invalid json'),
+    }));
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
+  });
+
+  it('should handle missing language patterns gracefully', () => {
+    mockConfig = { scanExcludePatterns: { global: ['**/temp/**'] } };
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn((p: string) => p.endsWith('config.json')),
+      readFileSync: jest.fn(() => JSON.stringify(mockConfig)),
+    }));
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/foo.ts', '.ts')).toBe(false);
+    expect(isFileExcludedByScanConfig('/temp/foo.ts', '.ts')).toBe(true);
+  });
+
+  it('should match patterns against both full path and filename', () => {
+    const { isFileExcludedByScanConfig } = require('./hook-receiver');
+    expect(isFileExcludedByScanConfig('/src/types.d.ts', '.ts')).toBe(true);
+    expect(isFileExcludedByScanConfig('/types.d.ts', '.ts')).toBe(true);
   });
 });
 
-describe('hook-receiver violation formatting', () => {
-  it('should format violations with line numbers', () => {
-    const violation = {
-      type: 'long_method',
-      severity: 'warning',
-      message: 'Method is too long',
-      line: 42,
-      fix: 'Extract into smaller methods',
-    };
+// ── isDaemonAlive ──────────────────────────────────────────────────
+describe('isDaemonAlive', () => {
+  let killSpy: jest.SpyInstance;
 
-    const loc = violation.line != null ? ` (line ${violation.line})` : '';
-    const fix = violation.fix ? ` — ${violation.fix}` : '';
-    const formatted = `[${violation.severity}] ${violation.message}${loc}${fix}`;
-
-    expect(formatted).toContain('(line 42)');
-    expect(formatted).toContain('Extract into smaller methods');
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+    killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      readFileSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return '12345';
+        return '';
+      }),
+      existsSync: jest.fn((p: string) => p.endsWith('daemon.pid')),
+    }));
   });
 
-  it('should format violations without line numbers', () => {
-    const violation = {
-      type: 'god_class',
-      severity: 'warning',
-      message: 'Class has too many methods',
-    };
-
-    const loc = (violation as any).line != null ? ` (line ${(violation as any).line})` : '';
-    const formatted = `[${violation.severity}] ${violation.message}${loc}`;
-
-    expect(formatted).not.toContain('(line');
+  afterEach(() => {
+    killSpy.mockRestore();
   });
 
-  it('should format violations without fix suggestions', () => {
-    const violation = {
-      type: 'any_type',
-      severity: 'error',
-      message: 'Using any type',
-      line: 10,
-    };
-
-    const loc = violation.line != null ? ` (line ${violation.line})` : '';
-    const fix = (violation as any).fix ? ` — ${(violation as any).fix}` : '';
-    const formatted = `[${violation.severity}] ${violation.message}${loc}${fix}`;
-
-    expect(formatted).toContain('(line 10)');
-    expect(formatted).not.toContain('—');
+  it('should return true when PID file exists and process is alive', () => {
+    const { isDaemonAlive } = require('./hook-receiver');
+    expect(isDaemonAlive()).toBe(true);
   });
 
-  it('should format info severity violations', () => {
-    const violation = {
-      type: 'magic_number',
-      severity: 'info',
-      message: 'Magic number detected',
-    };
+  it('should return false when PID file does not exist', () => {
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn(() => false),
+      readFileSync: jest.fn(() => { throw new Error('ENOENT'); }),
+    }));
+    const { isDaemonAlive } = require('./hook-receiver');
+    expect(isDaemonAlive()).toBe(false);
+  });
 
-    const formatted = `[${violation.severity}] ${violation.message}`;
-    expect(formatted).toBe('[info] Magic number detected');
+  it('should return false when PID is NaN', () => {
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      readFileSync: jest.fn(() => 'not-a-number'),
+      existsSync: jest.fn(() => true),
+    }));
+    const { isDaemonAlive } = require('./hook-receiver');
+    expect(isDaemonAlive()).toBe(false);
+  });
+
+  it('should return false when process.kill throws (process not running)', () => {
+    killSpy.mockImplementation(() => { throw new Error('ESRCH'); });
+    const { isDaemonAlive } = require('./hook-receiver');
+    expect(isDaemonAlive()).toBe(false);
+  });
+
+  it('should return false when reading PID file throws', () => {
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      readFileSync: jest.fn(() => { throw new Error('ENOENT'); }),
+      existsSync: jest.fn(() => true),
+    }));
+    const { isDaemonAlive } = require('./hook-receiver');
+    expect(isDaemonAlive()).toBe(false);
   });
 });
 
-describe('hook-receiver request/response formats', () => {
-  it('should format analyze request with filePath and repoRoot', () => {
-    const request = {
-      filePath: '/src/index.ts',
-      repoRoot: '/workspace',
-    };
+// ── ensureDaemonRunning ────────────────────────────────────────────
+describe('ensureDaemonRunning', () => {
+  let killSpy: jest.SpyInstance;
 
-    expect(request).toHaveProperty('filePath');
-    expect(request).toHaveProperty('repoRoot');
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+    killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      readFileSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return '12345';
+        return '';
+      }),
+      existsSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return true;
+        if (p.endsWith('daemon.js')) return true;
+        return false;
+      }),
+    }));
+    // Get fresh child_process mock and set default behavior
+    const cp = require('child_process');
+    cp.spawn.mockReturnValue({ unref: jest.fn() });
   });
 
-  it('should parse analyze response with analysis and minRating', () => {
-    const response = {
-      analysis: { rating: 8.5, violations: [] },
+  afterEach(() => {
+    killSpy.mockRestore();
+  });
+
+  it('should not spawn if daemon is already alive', async () => {
+    const cp = require('child_process');
+    const { ensureDaemonRunning } = require('./hook-receiver');
+    await ensureDaemonRunning();
+    expect(cp.spawn).not.toHaveBeenCalled();
+  });
+
+  it('should not spawn if daemon script does not exist', async () => {
+    killSpy.mockImplementation(() => { throw new Error('ESRCH'); });
+    jest.resetModules();
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      readFileSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return '12345';
+        return '';
+      }),
+      existsSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return true;
+        return false; // ← daemon.js does NOT exist
+      }),
+    }));
+    const cp = require('child_process');
+    const { ensureDaemonRunning } = require('./hook-receiver');
+    await ensureDaemonRunning();
+    expect(cp.spawn).not.toHaveBeenCalled();
+  });
+
+  it('should spawn daemon when not alive and script exists', async () => {
+    killSpy.mockImplementation(() => { throw new Error('ESRCH'); });
+    const cp = require('child_process');
+    const { ensureDaemonRunning } = require('./hook-receiver');
+    await ensureDaemonRunning();
+    expect(cp.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── isSessionRegistered ────────────────────────────────────────────
+describe('isSessionRegistered', () => {
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+  });
+
+  it('should return true when session file exists', () => {
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn(() => true),
+    }));
+    const { isSessionRegistered } = require('./hook-receiver');
+    expect(isSessionRegistered('test-session')).toBe(true);
+  });
+
+  it('should return false when session file does not exist', () => {
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn(() => false),
+    }));
+    const { isSessionRegistered } = require('./hook-receiver');
+    expect(isSessionRegistered('test-session')).toBe(false);
+  });
+
+  it('should return false when existsSync throws', () => {
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      existsSync: jest.fn(() => { throw new Error('EACCES'); }),
+    }));
+    const { isSessionRegistered } = require('./hook-receiver');
+    expect(isSessionRegistered('test-session')).toBe(false);
+  });
+});
+
+// ── markSessionRegistered ──────────────────────────────────────────
+describe('markSessionRegistered', () => {
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+  });
+
+  it('should create session directory and write timestamp', () => {
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      mkdirSync: jest.fn(),
+      writeFileSync: jest.fn(),
+    }));
+    const { markSessionRegistered } = require('./hook-receiver');
+    markSessionRegistered('test-session');
+    const fsMock = require('fs');
+    expect(fsMock.mkdirSync).toHaveBeenCalled();
+    expect(fsMock.writeFileSync).toHaveBeenCalled();
+  });
+
+  it('should silently handle filesystem errors', () => {
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      mkdirSync: jest.fn(() => { throw new Error('EACCES'); }),
+      writeFileSync: jest.fn(),
+    }));
+    const { markSessionRegistered } = require('./hook-receiver');
+    expect(() => markSessionRegistered('test-session')).not.toThrow();
+  });
+});
+
+// ── findGitRoot ────────────────────────────────────────────────────
+describe('findGitRoot', () => {
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+  });
+
+  it('should return git root when git command succeeds', () => {
+    const cp = require('child_process');
+    cp.spawnSync.mockReturnValue({ status: 0, stdout: '/my/repo' });
+    const { findGitRoot } = require('./hook-receiver');
+    expect(findGitRoot('/some/dir')).toBe('/my/repo');
+  });
+
+  it('should return input dir when git command fails', () => {
+    const cp = require('child_process');
+    cp.spawnSync.mockReturnValue({ status: 1, stdout: '' });
+    const { findGitRoot } = require('./hook-receiver');
+    expect(findGitRoot('/some/dir')).toBe('/some/dir');
+  });
+
+  it('should return input dir when stdout is empty', () => {
+    const cp = require('child_process');
+    cp.spawnSync.mockReturnValue({ status: 0, stdout: '' });
+    const { findGitRoot } = require('./hook-receiver');
+    expect(findGitRoot('/some/dir')).toBe('/some/dir');
+  });
+});
+
+// ── readStdin ──────────────────────────────────────────────────────
+describe('readStdin', () => {
+  let stdinHandlers: Record<string, Function>;
+
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+    stdinHandlers = {};
+    mockStdinOn((event: string, handler: Function) => {
+      stdinHandlers[event] = handler;
+    });
+    mockProcessExit();
+  });
+
+  it('should parse valid JSON from stdin and resolve', async () => {
+    const hr = require('./hook-receiver');
+    const promise = hr.readStdin();
+    stdinHandlers['data']('{"hook_event_name":"PostToolUse"}');
+    stdinHandlers['end']();
+    const result = await promise;
+    expect(result).toEqual({ hook_event_name: 'PostToolUse' });
+  });
+
+  it('should return null for invalid JSON', async () => {
+    const hr = require('./hook-receiver');
+    const promise = hr.readStdin();
+    stdinHandlers['data']('{ invalid json');
+    stdinHandlers['end']();
+    const result = await promise;
+    expect(result).toBeNull();
+  });
+
+  it('should return null when stdin times out', async () => {
+    jest.useFakeTimers();
+    const hr = require('./hook-receiver');
+    const promise = hr.readStdin();
+    jest.advanceTimersByTime(2500);
+    const result = await promise;
+    expect(result).toBeNull();
+    jest.useRealTimers();
+  });
+});
+
+// ── sendToDaemon ───────────────────────────────────────────────────
+describe('sendToDaemon', () => {
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    const cp = require('child_process');
+    cp.spawnSync.mockReturnValue({ status: 0, stdout: '/test/repo' });
+  });
+
+  it('should send file path and return analysis response', async () => {
+    const expected = { analysis: { rating: 8.5, violations: [] }, minRating: 6.5 };
+    httpMock.responseData = JSON.stringify(expected);
+    const { sendToDaemon } = require('./hook-receiver');
+    const result = await sendToDaemon('/test/file.ts');
+    expect(result).toEqual(expected);
+  });
+
+  it('should return null on request error', async () => {
+    httpMock.shouldError = true;
+    const { sendToDaemon } = require('./hook-receiver');
+    const result = await sendToDaemon('/test/file.ts');
+    expect(result).toBeNull();
+  });
+
+  it('should return null on request timeout', async () => {
+    httpMock.shouldTimeout = true;
+    const { sendToDaemon } = require('./hook-receiver');
+    const result = await sendToDaemon('/test/file.ts');
+    expect(result).toBeNull();
+  });
+
+  it('should return null on invalid JSON response', async () => {
+    httpMock.responseData = 'not-json';
+    const { sendToDaemon } = require('./hook-receiver');
+    const result = await sendToDaemon('/test/file.ts');
+    expect(result).toBeNull();
+  });
+});
+
+// ── registerRepository ─────────────────────────────────────────────
+describe('registerRepository', () => {
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    const cp = require('child_process');
+    cp.spawnSync.mockReturnValue({ status: 0, stdout: '/test/repo' });
+  });
+
+  const makePayload = () => ({
+    hook_event_name: 'session_create' as const,
+    tool_name: 'claude',
+    session_id: 'session-abc',
+    session_info: {
+      workspace_path: '/workspace',
+      git_root: '/workspace',
+      session_type: 'claude',
+    },
+  });
+
+  it('should send registration to daemon', async () => {
+    httpMock.responseData = '';
+    const { registerRepository } = require('./hook-receiver');
+    await registerRepository(makePayload());
+    const httpModule = require('http');
+    expect(httpModule.request).toHaveBeenCalled();
+    expect(httpModule.request.mock.calls[0][0].path).toBe('/repo-register');
+  });
+
+  it('should resolve on request error', async () => {
+    httpMock.shouldError = true;
+    const { registerRepository } = require('./hook-receiver');
+    await expect(registerRepository(makePayload())).resolves.toBeUndefined();
+  });
+
+  it('should resolve on request timeout', async () => {
+    httpMock.shouldTimeout = true;
+    const { registerRepository } = require('./hook-receiver');
+    await expect(registerRepository(makePayload())).resolves.toBeUndefined();
+  });
+});
+
+// ── main() ─────────────────────────────────────────────────────────
+describe('main', () => {
+  let stdinHandlers: Record<string, Function>;
+  let killSpy: jest.SpyInstance;
+
+  function fireStdin(data: string) {
+    stdinHandlers['data'](data);
+    stdinHandlers['end']();
+  }
+
+  async function runMain(payload: object) {
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    fireStdin(JSON.stringify(payload));
+    await new Promise(r => setTimeout(r, 150));
+    return p;
+  }
+
+  beforeEach(() => {
+    httpMock.responseData = '';
+    httpMock.shouldError = false;
+    httpMock.shouldTimeout = false;
+    jest.resetModules();
+    stdinHandlers = {};
+    mockStdinOn((event: string, handler: Function) => {
+      stdinHandlers[event] = handler;
+    });
+    mockStdoutWrite();
+    mockProcessExit();
+    killSpy = jest.spyOn(process, 'kill').mockImplementation(() => true);
+    jest.doMock('fs', () => ({
+      ...jest.requireActual('fs'),
+      readFileSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return '12345';
+        return '';
+      }),
+      existsSync: jest.fn((p: string) => {
+        if (p.endsWith('daemon.pid')) return true;
+        if (p.endsWith('daemon.js')) return true;
+        return false;
+      }),
+      mkdirSync: jest.fn(),
+      writeFileSync: jest.fn(),
+    }));
+    const cp = require('child_process');
+    cp.spawnSync.mockReturnValue({ status: 0, stdout: '/test/repo' });
+  });
+
+  afterEach(() => {
+    killSpy.mockRestore();
+  });
+
+  it('should exit early when stdin returns null payload', async () => {
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    stdinHandlers['data']('not json');
+    stdinHandlers['end']();
+    await expect(p).resolves.toBeUndefined();
+  });
+
+  it('should handle session_create event', async () => {
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    httpMock.responseData = '';
+    await runMain({
+      hook_event_name: 'session_create',
+      tool_name: 'claude',
+      session_id: 'session-abc',
+      session_info: { workspace_path: '/workspace', git_root: '/workspace', session_type: 'claude' },
+    });
+    const httpModule2 = require('http');
+    expect(httpModule2.request).toHaveBeenCalled();
+  });
+
+  it('should handle SessionStart event', async () => {
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    httpMock.responseData = '';
+    await runMain({
+      hook_event_name: 'SessionStart',
+      session_id: 'session-xyz',
+      cwd: '/workspace',
+    });
+    const httpModule2 = require('http');
+    expect(httpModule2.request).toHaveBeenCalled();
+  });
+
+  it('should handle SessionStart without session_id or cwd', async () => {
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    fireStdin(JSON.stringify({ hook_event_name: 'SessionStart' }));
+    await new Promise(r => setTimeout(r, 50));
+    await expect(p).resolves.toBeUndefined();
+  });
+
+  it('should handle UserPromptSubmit for a new session', async () => {
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    httpMock.responseData = '';
+    await runMain({
+      hook_event_name: 'UserPromptSubmit',
+      session_id: 'session-new',
+      cwd: '/workspace',
+    });
+    const httpModule2 = require('http');
+    expect(httpModule2.request).toHaveBeenCalled();
+  });
+
+  it('should handle PostToolUse with watched file and rating below minimum', async () => {
+    httpMock.responseData = JSON.stringify({
+      analysis: { rating: 4.0, violations: [{ severity: 'error', message: 'Bad code', line: 10, fix: 'Fix it' }], metrics: {} },
       minRating: 6.5,
-    };
-
-    expect(response).toHaveProperty('analysis');
-    expect(response).toHaveProperty('minRating');
-    expect(response.analysis.rating).toBe(8.5);
+    });
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    fireStdin(JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: '/test/file.ts' },
+    }));
+    await new Promise(r => setTimeout(r, 150));
+    await expect(p).resolves.toBeUndefined();
+    expect(process.exit).toHaveBeenCalledWith(2);
   });
 
-  it('should handle null analysis response', () => {
-    const response = {
-      analysis: null,
+  it('should not exit when rating meets minimum', async () => {
+    httpMock.responseData = JSON.stringify({
+      analysis: { rating: 8.5, violations: [], metrics: {} },
       minRating: 6.5,
-    };
-
-    expect(response.analysis).toBeNull();
-    expect(response.minRating).toBe(6.5);
+    });
+    const httpModule = require('http');
+    setupHttpRequest(httpModule);
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    fireStdin(JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: '/test/file.ts' },
+    }));
+    await new Promise(r => setTimeout(r, 150));
+    await expect(p).resolves.toBeUndefined();
+    expect(process.exit).not.toHaveBeenCalled();
   });
 
-  it('should format repo-register request', () => {
-    const request = {
-      action: 'register_repo',
-      repo: {
-        path: '/workspace',
-        name: 'my-project',
-        sessionId: 'abc123',
-      },
-    };
-
-    expect(request.action).toBe('register_repo');
-    expect(request.repo.path).toBeDefined();
-  });
-});
-
-describe('hook-receiver session management', () => {
-  describe('isSessionRegistered function', () => {
-    it('should return false when session dir does not exist', () => {
-      const { existsSync } = require('fs');
-      (existsSync as jest.Mock).mockReturnValue(false);
-
-      const sessionDir = '/tmp/.gate-keeper/sessions/session-123';
-      const isRegistered = false; // Mocked to false
-      expect(isRegistered).toBe(false);
-    });
-
-    it('should return true when session file exists', () => {
-      const { existsSync } = require('fs');
-      (existsSync as jest.Mock).mockReturnValue(true);
-
-      const sessionDir = '/tmp/.gate-keeper/sessions/session-123';
-      const isRegistered = true; // Mocked to true
-      expect(isRegistered).toBe(true);
-    });
-
-    it('should handle filesystem errors gracefully', () => {
-      const sessionId = 'test-session';
-      try {
-        // Simulating error handling
-        throw new Error('ENOENT');
-      } catch {
-        // Should continue and return false
-        const isRegistered = false;
-        expect(isRegistered).toBe(false);
-      }
-    });
+  it('should skip unsupported file extensions', async () => {
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    fireStdin(JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: '/test/file.py' },
+    }));
+    await new Promise(r => setTimeout(r, 50));
+    await expect(p).resolves.toBeUndefined();
+    const httpModule = require('http');
+    expect(httpModule.request).not.toHaveBeenCalled();
   });
 
-  describe('markSessionRegistered function', () => {
-    it('should create sessions directory if missing', () => {
-      const { mkdirSync } = require('fs');
-      const mockMkdir = mkdirSync as jest.Mock;
-
-      expect(mockMkdir).toBeDefined();
-    });
-
-    it('should write timestamp to session file', () => {
-      const { writeFileSync } = require('fs');
-      const mockWrite = writeFileSync as jest.Mock;
-      const timestamp = String(Date.now());
-
-      expect(timestamp).toMatch(/^\d+$/);
-    });
-
-    it('should silently fail on filesystem errors', () => {
-      try {
-        throw new Error('EACCES');
-      } catch {
-        // Should not re-throw
-        expect(true).toBe(true);
-      }
-    });
+  it('should skip when tool_input has no file_path or path', async () => {
+    const hr = require('./hook-receiver');
+    const p = hr.main();
+    fireStdin(JSON.stringify({
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Write',
+      tool_input: {},
+    }));
+    await new Promise(r => setTimeout(r, 50));
+    await expect(p).resolves.toBeUndefined();
   });
 });
-
-describe('hook-receiver stdin handling', () => {
-  describe('readStdin function', () => {
-    it('should parse valid JSON from stdin', () => {
-      const data = JSON.stringify({
-        hook_event_name: 'PostToolUse',
-        tool_name: 'Write',
-      });
-
-      const parsed = JSON.parse(data);
-      expect(parsed.hook_event_name).toBe('PostToolUse');
-    });
-
-    it('should return null for invalid JSON', () => {
-      try {
-        JSON.parse('{ invalid json');
-      } catch {
-        const result = null;
-        expect(result).toBeNull();
-      }
-    });
-
-    it('should timeout after 2 seconds if stdin does not close', () => {
-      const timeout = 2000;
-      expect(timeout).toBe(2000);
-    });
-
-    it('should handle empty stdin gracefully', () => {
-      const data = '';
-      try {
-        const parsed = JSON.parse(data);
-      } catch {
-        expect(true).toBe(true);
-      }
-    });
-  });
-});
-
-describe('hook-receiver file gating', () => {
-  it('should exit with code 2 when analysis rating is below minimum', () => {
-    const analysis = { rating: 5.0 };
-    const minRating = 6.5;
-    const shouldExit = analysis.rating < minRating;
-
-    expect(shouldExit).toBe(true);
-  });
-
-  it('should continue execution when rating meets minimum', () => {
-    const analysis = { rating: 7.5 };
-    const minRating = 6.5;
-    const shouldExit = analysis.rating < minRating;
-
-    expect(shouldExit).toBe(false);
-  });
-
-  it('should include violation details in exit message', () => {
-    const violations = [
-      { severity: 'error', message: 'Missing key prop', line: 10 },
-      { severity: 'warning', message: 'Using any type', line: 20 },
-    ];
-
-    for (const v of violations) {
-      const formatted = `[${v.severity}] ${v.message}`;
-      expect(formatted).toContain(v.message);
-    }
-  });
-
-  it('should include rating and minimum threshold in message', () => {
-    const rating = 4.5;
-    const minRating = 6.5;
-    const message = `rated ${rating}/10 (minimum ${minRating}/10)`;
-
-    expect(message).toContain('4.5');
-    expect(message).toContain('6.5');
-  });
-});
-
-// Note: Integration tests for the main() function execution flow are limited
-// because the module executes immediately on import. The exported helper functions
-// (globToRegex, isFileExcludedByScanConfig, WATCHED_EXTENSIONS) are fully tested above.
-//
-// The hook-receiver is designed to be executed as a script (not imported as a module),
-// and its main() function reads from stdin synchronously. Full integration testing
-// would require spawning the script as a child process and piping input to it.

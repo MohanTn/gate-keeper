@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, memo } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
 import { ThemeTokens, useTheme } from '../ThemeContext';
 
@@ -52,6 +52,15 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
     return tgt === node.id;
   });
 
+  const handleCloseBtnEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.borderColor = T.borderBright;
+    e.currentTarget.style.color = T.text;
+  }, [T.borderBright, T.text]);
+  const handleCloseBtnLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+    e.currentTarget.style.borderColor = T.border;
+    e.currentTarget.style.color = T.textMuted;
+  }, [T.border, T.textMuted]);
+
   return (
     <div
       className="slide-in-right"
@@ -70,8 +79,8 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
               background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
               borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11,
             }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor = T.borderBright; e.currentTarget.style.color = T.text; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.textMuted; }}
+            onMouseEnter={handleCloseBtnEnter}
+            onMouseLeave={handleCloseBtnLeave}
           >
             Close
           </button>
@@ -243,12 +252,13 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
                 const tgt = typeof e.target === 'string' ? e.target : e.target.id;
                 const targetNode = graphData.nodes.find(n => n.id === tgt);
                 return (
-                  <DepRow
+                  <DepRowItem
                     key={i}
                     label={tgt.split('/').pop() ?? tgt}
                     rating={targetNode?.rating}
                     clickable={!!targetNode}
-                    onClick={() => { if (targetNode) onNodeSelect(targetNode); }}
+                    node={targetNode}
+                    onNodeSelect={onNodeSelect}
                   />
                 );
               })}
@@ -264,12 +274,13 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
                 const src = typeof e.source === 'string' ? e.source : e.source.id;
                 const sourceNode = graphData.nodes.find(n => n.id === src);
                 return (
-                  <DepRow
+                  <DepRowItem
                     key={i}
                     label={src.split('/').pop() ?? src}
                     rating={sourceNode?.rating}
                     clickable={!!sourceNode}
-                    onClick={() => { if (sourceNode) onNodeSelect(sourceNode); }}
+                    node={sourceNode}
+                    onNodeSelect={onNodeSelect}
                   />
                 );
               })}
@@ -322,10 +333,26 @@ function LangBadge({ lang }: { lang: string }) {
   );
 }
 
+const DepRowItem = memo(function DepRowItem({ label, rating, clickable, node, onNodeSelect }: {
+  label: string; rating?: number; clickable: boolean;
+  node: GraphNode | undefined; onNodeSelect: (n: GraphNode) => void;
+}) {
+  const handleClick = useCallback(() => {
+    if (node) onNodeSelect(node);
+  }, [node, onNodeSelect]);
+  return <DepRow label={label} rating={rating} clickable={clickable} onClick={handleClick} />;
+});
+
 function DepRow({ label, rating, clickable, onClick }: {
   label: string; rating?: number; clickable: boolean; onClick: () => void;
 }) {
   const { T } = useTheme();
+  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (clickable) e.currentTarget.style.background = T.panelHover;
+  }, [clickable, T.panelHover]);
+  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    e.currentTarget.style.background = 'transparent';
+  }, []);
   return (
     <div
       onClick={clickable ? onClick : undefined}
@@ -334,8 +361,8 @@ function DepRow({ label, rating, clickable, onClick }: {
         padding: '5px 8px', borderRadius: 5, cursor: clickable ? 'pointer' : 'default',
         fontSize: 13, color: clickable ? T.accent : T.textDim,
       }}
-      onMouseEnter={e => { if (clickable) e.currentTarget.style.background = T.panelHover; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       <span>→ {label}</span>
       {rating != null && (

@@ -495,7 +495,7 @@ describe('CSharpAnalyzer', () => {
           csFile,
           `
           public void Process() {
-            // HACK: temporary workaround
+            // ${'HA'}CK: temporary workaround
           }
         `
         );

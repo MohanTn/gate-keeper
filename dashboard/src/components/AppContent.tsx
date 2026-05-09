@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { VisGraphView } from './VisGraphView';
 import { DetailPanel } from './DetailPanel';
 import { FileListDrawer } from './FileListDrawer';
@@ -71,6 +71,10 @@ export function AppContent({
     }, [isResizing]);
 
     const [dividerHover, setDividerHover] = useState(false);
+
+    const handleDividerMouseDown = useCallback(() => setIsResizing(true), []);
+    const handleDividerMouseEnter = useCallback(() => setDividerHover(true), []);
+    const handleDividerMouseLeave = useCallback(() => setDividerHover(false), []);
 
     if (repoLoading) {
         return (
@@ -160,9 +164,9 @@ export function AppContent({
             )}
             {(
                 <div
-                    onMouseDown={() => setIsResizing(true)}
-                    onMouseEnter={() => setDividerHover(true)}
-                    onMouseLeave={() => setDividerHover(false)}
+                    onMouseDown={handleDividerMouseDown}
+                    onMouseEnter={handleDividerMouseEnter}
+                    onMouseLeave={handleDividerMouseLeave}
                     style={{
                         width: 8, paddingLeft: 2, paddingRight: 2,
                         cursor: 'col-resize',

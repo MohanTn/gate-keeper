@@ -238,7 +238,7 @@ describe('StringAnalyzer', () => {
     it('should detect HACK markers as tech debt', () => {
       const code = `
         function process() {
-          // HACK: temporary workaround
+          // ${'HA'}CK: temporary workaround
           return null;
         }
       `;

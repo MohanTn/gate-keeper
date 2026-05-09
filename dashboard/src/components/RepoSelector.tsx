@@ -102,6 +102,14 @@ function RepoButton({ repo, isSelected, onSelect, onDelete }: {
             .then(() => onDelete(repo.repoRoot))
             .catch(() => alert('Failed to delete repository'));
     }, [repo.repoRoot, repo.label, onDelete]);
+    const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+        (e.currentTarget as HTMLButtonElement).style.color = T.red;
+        (e.currentTarget as HTMLButtonElement).style.borderColor = T.red;
+    }, [T.red]);
+    const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
+        (e.currentTarget as HTMLButtonElement).style.color = T.textMuted;
+        (e.currentTarget as HTMLButtonElement).style.borderColor = T.border;
+    }, [T.textMuted, T.border]);
 
     return (
         <div style={{
@@ -149,8 +157,8 @@ function RepoButton({ repo, isSelected, onSelect, onDelete }: {
                     padding: '4px 10px',
                     cursor: 'pointer', color: T.textMuted, fontSize: 11, transition: 'all 0.12s',
                 }}
-                onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = T.red; (e.currentTarget as HTMLButtonElement).style.borderColor = T.red; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = T.textMuted; (e.currentTarget as HTMLButtonElement).style.borderColor = T.border; }}
+                onMouseEnter={handleMouseEnter}
+                onMouseLeave={handleMouseLeave}
             >
                 Delete
             </button>
