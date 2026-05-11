@@ -61,35 +61,23 @@ jest.mock('vis-data/standalone', () => ({
   }),
 }));
 
-// Mock ThemeContext
-jest.mock('../ThemeContext', () => ({
-  useTheme: () => ({
-    T: {
-      bg: '#0B1120',
-      border: '#1E293B',
-      borderBright: '#334155',
-      panel: '#1E293B',
-      panelHover: '#2D3E50',
-      text: '#F1F5F9',
-      textMuted: '#94A3B8',
-      textFaint: '#475569',
-      textDim: '#64748B',
-      accent: '#3B82F6',
-      accentDim: '#1E3A5F',
-      cardBg: '#1A2332',
-      cardBgHover: '#2A3B52',
-      elevated: '#1E293B',
-      red: '#EF4444',
-      green: '#22C55E',
-      yellow: '#EAB308',
-      orange: '#F97316',
-      edgeDefault: 'rgba(148, 163, 184, 0.4)',
-      edgeDim: 'rgba(100, 116, 139, 0.2)',
-      edgeHighlight: 'rgba(59, 130, 246, 0.7)',
-      edgeCircular: 'rgba(239, 68, 68, 0.6)',
-    },
-  }),
-}));
+// Mock ThemeContext — return a STABLE T reference across renders so
+// effects keyed on [T] don't tear down and recreate Network every commit.
+jest.mock('../ThemeContext', () => {
+  const T = {
+    bg: '#0B1120', border: '#1E293B', borderBright: '#334155',
+    panel: '#1E293B', panelHover: '#2D3E50',
+    text: '#F1F5F9', textMuted: '#94A3B8', textFaint: '#475569', textDim: '#64748B',
+    accent: '#3B82F6', accentDim: '#1E3A5F',
+    cardBg: '#1A2332', cardBgHover: '#2A3B52', elevated: '#1E293B',
+    red: '#EF4444', green: '#22C55E', yellow: '#EAB308', orange: '#F97316',
+    edgeDefault: 'rgba(148, 163, 184, 0.4)',
+    edgeDim: 'rgba(100, 116, 139, 0.2)',
+    edgeHighlight: 'rgba(59, 130, 246, 0.7)',
+    edgeCircular: 'rgba(239, 68, 68, 0.6)',
+  };
+  return { useTheme: () => ({ T }) };
+});
 
 // Mock graph-utils
 jest.mock('./graph-utils', () => ({
@@ -127,6 +115,7 @@ describe('VisGraphView', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockNetworkInstance = null;
     (global.fetch as jest.Mock).mockResolvedValue({
       json: async () => [],
     });
@@ -1047,6 +1036,352 @@ describe('VisGraphView', () => {
       // Verify callbacks are ready to be used
       expect(typeof onNodeClick).toBe('function');
       expect(typeof onCanvasClick).toBe('function');
+    });
+  });
+
+  // ── Event handler coverage (drag, hover, blur, click) ────────
+  describe('Network Event Handlers', () => {
+    async function renderAndGetNetwork(props: Partial<React.ComponentProps<typeof VisGraphView>> = {}) {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      const utils = render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          {...props}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      return { ...utils, onNodeClick, onCanvasClick, network: mockNetworkInstance };
+    }
+
+    it('invokes onNodeClick when a node-click event fires', async () => {
+      const { onNodeClick, network } = await renderAndGetNetwork();
+      network.eventListeners.click({ nodes: ['file-1'] });
+      expect(onNodeClick).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'file-1' })
+      );
+    });
+
+    it('invokes onCanvasClick when an empty-canvas click fires', async () => {
+      const { onCanvasClick, network } = await renderAndGetNetwork();
+      network.eventListeners.click({ nodes: [] });
+      expect(onCanvasClick).toHaveBeenCalled();
+    });
+
+    it('ignores click for unknown node ids without throwing', async () => {
+      const { onNodeClick, network } = await renderAndGetNetwork();
+      network.eventListeners.click({ nodes: ['ghost-node'] });
+      expect(onNodeClick).not.toHaveBeenCalled();
+    });
+
+    it('runs small-graph hover path and updates all nodes/edges', async () => {
+      const { network } = await renderAndGetNetwork();
+      network.eventListeners.hoverNode({ node: 'file-1' });
+      // Update should have been invoked on both DataSets after the hover
+      const visData = require('vis-data/standalone');
+      const dsInstances = (visData.DataSet as jest.Mock).mock.instances;
+      const updateCalls = dsInstances.flatMap((i: any) => i.update.mock.calls);
+      expect(updateCalls.length).toBeGreaterThan(0);
+    });
+
+    it('runs blur-node restore path on small graphs', async () => {
+      const { network } = await renderAndGetNetwork();
+      network.eventListeners.hoverNode({ node: 'file-1' });
+      network.eventListeners.blurNode({ node: 'file-1' });
+      // After blur, edges should be cleared and rebuilt
+      const visData = require('vis-data/standalone');
+      const dsInstances = (visData.DataSet as jest.Mock).mock.instances;
+      const clearCalls = dsInstances.flatMap((i: any) => i.clear.mock.calls);
+      expect(clearCalls.length).toBeGreaterThan(0);
+    });
+
+    it('runs large-graph hover branch when node count > 200', async () => {
+      const largeGraphData: GraphData = {
+        nodes: Array.from({ length: 250 }, (_, i) => ({
+          id: `file-${i}`,
+          label: `file${i}.ts`,
+          type: 'typescript',
+          rating: 7,
+          size: 100,
+          violations: [],
+          metrics: mockMetrics,
+        })),
+        edges: [],
+      };
+      const { network } = await renderAndGetNetwork({ graphData: largeGraphData });
+      network.eventListeners.hoverNode({ node: 'file-0' });
+      network.eventListeners.blurNode({ node: 'file-0' });
+      // Just confirm no throw and listeners exist
+      expect(network.eventListeners.hoverNode).toBeDefined();
+      expect(network.eventListeners.blurNode).toBeDefined();
+    });
+
+    it('persists position via POST when a node drag ends with selectedRepo', async () => {
+      const { network } = await renderAndGetNetwork({ selectedRepo: 'demo-repo' });
+      // Seed the dataset with a node that has x/y so dragEnd can read them
+      const visData = require('vis-data/standalone');
+      const nodesDS = (visData.DataSet as jest.Mock).mock.instances[0];
+      nodesDS.items.set('file-1', { id: 'file-1', x: 42, y: 84 });
+
+      (global.fetch as jest.Mock).mockClear();
+      (global.fetch as jest.Mock).mockResolvedValueOnce({ json: async () => ({}) });
+
+      network.eventListeners.dragEnd({ nodes: ['file-1'] });
+
+      const postCall = (global.fetch as jest.Mock).mock.calls.find(
+        c => c[0] === '/api/positions' && c[1]?.method === 'POST'
+      );
+      expect(postCall).toBeDefined();
+      expect(JSON.parse(postCall[1].body)).toMatchObject({
+        repo: 'demo-repo', nodeId: 'file-1', x: 42, y: 84,
+      });
+    });
+
+    it('skips POST on dragEnd when no repo is selected', async () => {
+      const { network } = await renderAndGetNetwork({ selectedRepo: null });
+      const visData = require('vis-data/standalone');
+      const nodesDS = (visData.DataSet as jest.Mock).mock.instances[0];
+      nodesDS.items.set('file-1', { id: 'file-1', x: 10, y: 20 });
+
+      (global.fetch as jest.Mock).mockClear();
+      network.eventListeners.dragEnd({ nodes: ['file-1'] });
+
+      const postCalls = (global.fetch as jest.Mock).mock.calls.filter(
+        c => c[1]?.method === 'POST'
+      );
+      expect(postCalls).toHaveLength(0);
+    });
+
+    it('safely skips dragEnd when node is missing from the dataset', async () => {
+      const { network } = await renderAndGetNetwork({ selectedRepo: 'demo' });
+      (global.fetch as jest.Mock).mockClear();
+      expect(() => network.eventListeners.dragEnd({ nodes: ['absent'] })).not.toThrow();
+    });
+  });
+
+  describe('Zoom handler effects', () => {
+    it('calls network.moveTo when zoom-in is clicked after init', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      fireEvent.click(screen.getByText('+'));
+      expect(mockNetworkInstance.moveTo).toHaveBeenCalled();
+    });
+
+    it('calls network.moveTo when zoom-out is clicked after init', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      fireEvent.click(screen.getByText('−'));
+      expect(mockNetworkInstance.moveTo).toHaveBeenCalled();
+    });
+
+    it('calls network.fit when Fit is clicked after init', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      (mockNetworkInstance.fit as jest.Mock).mockClear();
+      fireEvent.click(screen.getByText('Fit'));
+      expect(mockNetworkInstance.fit).toHaveBeenCalled();
+    });
+  });
+
+  describe('Effects after network is mounted', () => {
+    it('toggles dragView via setOptions when scanning prop changes', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      const { rerender } = render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          scanning={false}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      (mockNetworkInstance.setOptions as jest.Mock).mockClear();
+
+      rerender(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          scanning={true}
+        />
+      );
+
+      await waitFor(() => {
+        expect(mockNetworkInstance.setOptions).toHaveBeenCalledWith(
+          expect.objectContaining({ interaction: { dragView: false } })
+        );
+      });
+    });
+
+    it('calls selectNodes when focusNodeId becomes set after init', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      const { rerender } = render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          focusNodeId={null}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      (mockNetworkInstance.selectNodes as jest.Mock).mockClear();
+
+      rerender(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          focusNodeId="file-1"
+        />
+      );
+
+      expect(mockNetworkInstance.selectNodes).toHaveBeenCalledWith(['file-1'], false);
+    });
+
+    it('preserves pinned node x/y when graph data re-syncs (covers line 118)', async () => {
+      (global.fetch as jest.Mock).mockResolvedValueOnce({
+        json: async () => [{ nodeId: 'file-1', x: 123, y: 456 }],
+      });
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      const { rerender } = render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo="repo-1"
+        />
+      );
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/positions?repo=repo-1');
+      });
+
+      const visData = require('vis-data/standalone');
+      const nodesDS = (visData.DataSet as jest.Mock).mock.instances[0];
+      // Seed an existing entry with concrete x/y so the pinned-preserve branch reads them
+      nodesDS.items.set('file-1', { id: 'file-1', x: 123, y: 456 });
+      nodesDS.update.mockClear();
+
+      const updatedGraphData: GraphData = {
+        ...mockGraphData,
+        nodes: mockGraphData.nodes.map(n => ({ ...n, rating: n.rating - 0.5 })),
+      };
+
+      rerender(
+        <VisGraphView
+          graphData={updatedGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo="repo-1"
+        />
+      );
+
+      await waitFor(() => {
+        const pinnedUpdate = nodesDS.update.mock.calls.find((c: any) => {
+          const arg = c[0];
+          if (Array.isArray(arg)) return false;
+          return arg && arg.id === 'file-1' && arg.x === 123 && arg.y === 456;
+        });
+        expect(pinnedUpdate).toBeDefined();
+      });
+    });
+
+    it('dims non-connected edges on small-graph hover (covers lines 337-339)', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+        />
+      );
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+
+      // getConnectedEdges returns 'connected-edge-1' (not in dataset),
+      // so the only seeded edge ('edge-0') falls through to the dim branch.
+      const visData = require('vis-data/standalone');
+      const dsInstances = (visData.DataSet as jest.Mock).mock.instances;
+      const edgesDS = dsInstances[1];
+      edgesDS.update.mockClear();
+
+      mockNetworkInstance.eventListeners.hoverNode({ node: 'file-1' });
+
+      const dimUpdate = edgesDS.update.mock.calls.find((c: any) => {
+        const arg = c[0];
+        if (!Array.isArray(arg)) return false;
+        return arg.some((u: any) => u.id === 'edge-0' && u.width === 0.5);
+      });
+      expect(dimUpdate).toBeDefined();
+    });
+
+    it('runs highlight cleanup when highlightNodeId is removed', async () => {
+      const onNodeClick = jest.fn();
+      const onCanvasClick = jest.fn();
+      const { rerender } = render(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          highlightNodeId="file-1"
+        />
+      );
+
+      await waitFor(() => expect(mockNetworkInstance).not.toBeNull());
+      (graphUtils.makeNodeColor as jest.Mock).mockClear();
+
+      rerender(
+        <VisGraphView
+          graphData={mockGraphData}
+          onNodeClick={onNodeClick}
+          onCanvasClick={onCanvasClick}
+          selectedRepo={null}
+          highlightNodeId={undefined}
+        />
+      );
+
+      // Cleanup of the previous highlight effect calls makeNodeColor(healthColor(...))
+      await waitFor(() => {
+        expect(graphUtils.makeNodeColor).toHaveBeenCalled();
+      });
     });
   });
 });

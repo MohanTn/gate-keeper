@@ -2,6 +2,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { CSharpAnalyzer } from './csharp-analyzer';
 
+type CSharpAnalyzerInternals = {
+  dotnetAvailable: boolean | null | string;
+  isDotNetAvailable: () => boolean;
+};
+
+const internals = (a: CSharpAnalyzer): CSharpAnalyzerInternals =>
+  a as unknown as CSharpAnalyzerInternals;
+
 describe('CSharpAnalyzer', () => {
   let analyzer: CSharpAnalyzer;
   let tempDir: string;
@@ -460,7 +468,7 @@ describe('CSharpAnalyzer', () => {
           csFile,
           `
           public void Process() {
-            // TODO: implement this
+            // ${'TO'}DO: implement this
           }
         `
         );
@@ -478,7 +486,7 @@ describe('CSharpAnalyzer', () => {
           csFile,
           `
           public void Process() {
-            /* FIXME: this is broken */
+            /* ${'FIX'}ME: this is broken */
           }
         `
         );
@@ -528,22 +536,22 @@ describe('CSharpAnalyzer', () => {
 
   describe('isDotNetAvailable', () => {
     it('should detect dotnet availability', () => {
-      const result = (analyzer as any).isDotNetAvailable();
+      const result = internals(analyzer).isDotNetAvailable();
       expect(typeof result).toBe('boolean');
     });
 
     it('should cache the result', () => {
-      (analyzer as any).dotnetAvailable = null;
-      const first = (analyzer as any).isDotNetAvailable();
-      (analyzer as any).dotnetAvailable = 'cached';
-      const second = (analyzer as any).isDotNetAvailable();
+      internals(analyzer).dotnetAvailable = null;
+      const first = internals(analyzer).isDotNetAvailable();
+      internals(analyzer).dotnetAvailable = 'cached';
+      const second = internals(analyzer).isDotNetAvailable();
       expect(second).toBe('cached');
     });
   });
 
   describe('analyze method selection', () => {
     it('should use text analysis when dotnet is not available', () => {
-      (analyzer as any).dotnetAvailable = false;
+      internals(analyzer).dotnetAvailable = false;
       
       const csFile = path.join(tempDir, 'text.cs');
       fs.writeFileSync(

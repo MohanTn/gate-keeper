@@ -83,7 +83,7 @@ export interface FileDetailResponse {
 }
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_progress' | 'scan_complete' | 'repo_created' | 'repo_list' | 'scan_log';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_progress' | 'scan_complete' | 'repo_created' | 'repo_list' | 'scan_log' | 'queue_update' | 'queue_progress' | 'worker_activity' | 'trend_update';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
@@ -94,6 +94,19 @@ export interface WSMessage {
   logMessage?: string;
   logLevel?: 'info' | 'error' | 'warn';
   logTimestamp?: number;
+
+  // Quality loop
+  queueItem?: QueueItem;
+  queueStats?: QueueStats;
+  queueOverallRating?: number;
+  queueDone?: boolean;
+  workerAction?: 'start' | 'complete' | 'error';
+  workerFilePath?: string;
+  workerId?: string;
+  workerRating?: number;
+  workerSuccess?: boolean;
+  workerError?: string;
+  trend?: TrendDataPoint;
 }
 
 export interface RepoInfo {
@@ -128,4 +141,58 @@ export interface ScanLogEntry {
   message: string;
   level: 'info' | 'error' | 'warn';
   timestamp: number;
+}
+
+// ── Quality Loop Types ──────────────────────────────────────
+
+export interface QueueItem {
+  id: number;
+  repo: string;
+  filePath: string;
+  currentRating: number;
+  targetRating: number;
+  priorityScore: number;
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+  attempts: number;
+  maxAttempts: number;
+  workerId: string | null;
+  lockedAt: number | null;
+  errorMessage: string | null;
+  completedAt: number | null;
+  createdAt: number;
+}
+
+export interface QueueStats {
+  total: number;
+  pending: number;
+  inProgress: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+}
+
+export interface TrendDataPoint {
+  id: number;
+  repo: string;
+  overallRating: number;
+  filesTotal: number;
+  filesPassed: number;
+  filesFailed: number;
+  filesPending: number;
+  recordedAt: number;
+}
+
+export interface AttemptLog {
+  id: number;
+  queue_id: number;
+  attempt: number;
+  rating_before: number;
+  rating_after: number | null;
+  violations_fixed: number;
+  violations_remaining: number;
+  fix_summary: string | null;
+  error_message: string | null;
+  duration_ms: number | null;
+  worker_output: string | null;
+  created_at: number;
 }

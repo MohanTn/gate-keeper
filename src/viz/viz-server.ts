@@ -143,6 +143,10 @@ export class VizServer {
     this.broadcast({ type: 'repo_created', repo } satisfies WSMessage);
   }
 
+  public broadcastMessage(msg: WSMessage, repoFilter?: string): void {
+    this.broadcast(msg, repoFilter);
+  }
+
   private broadcast(msg: WSMessage, repoFilter?: string): void {
     const json = JSON.stringify(msg);
     this.wss.clients.forEach(client => {
