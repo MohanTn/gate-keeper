@@ -16,6 +16,7 @@ import { UniversalAnalyzer } from './analyzer/universal-analyzer';
 import { SqliteCache } from './cache/sqlite-cache';
 import { VizServer } from './viz/viz-server';
 import { Config, DaemonRequest, RepoMetadata } from './types';
+import { QualityOrchestrator, loadQualityConfig } from './quality-loop/orchestrator';
 import { mergeFileLayer, getEffectiveLayer, readArchConfig, DEFAULT_LAYERS } from './arch/arch-config-manager';
 
 declare global {
@@ -89,6 +90,7 @@ export function findGitRoot(dir: string): string {
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const noScan = args.includes('--no-scan');
+  const qualityLoop = args.includes('--quality-loop');
 
   ensurePidFile();
   ensureConfigFile();
@@ -103,6 +105,28 @@ export async function main(): Promise<void> {
 
   await vizServer.start();
 
+  // Quality Loop Orchestrator (started with --quality-loop)
+  let orchestrator: QualityOrchestrator | null = null;
+  if (qualityLoop) {
+    const qlConfig = loadQualityConfig();
+    if (qlConfig.repos.length === 0) {
+      // Auto-populate repos from registered repos, then fall back to analyzed repos
+      const registered = cache.getAllRepositories(true);
+      qlConfig.repos = registered.map(r => r.path);
+      if (qlConfig.repos.length === 0) {
+        qlConfig.repos = cache.getRepos();
+      }
+    }
+    orchestrator = new QualityOrchestrator(qlConfig, cache, {
+      broadcast: (msg) => vizServer.broadcastMessage(msg),
+      getAnalyzedFiles: (repo) => {
+        const analyses = cache.getAll(repo);
+        return analyses.map(a => ({ path: a.path, rating: a.rating, repoRoot: a.repoRoot ?? repo }));
+      },
+    });
+    console.error(`[gate-keeper] Quality loop ready (threshold: ${qlConfig.threshold}, workers: ${qlConfig.maxWorkers})`);
+  }
+
   if (!noScan) {
     // Initial workspace scan — runs in the background, non-blocking
     vizServer.scan(false).catch(err => {
@@ -115,6 +139,13 @@ export async function main(): Promise<void> {
   // IPC HTTP server — only binds to localhost
   const ipc = express();
   ipc.use(express.json());
+  ipc.use((_req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    if (_req.method === 'OPTIONS') { res.sendStatus(204); return; }
+    next();
+  });
 
   ipc.get('/health', (_req, res) => {
     res.json({ ok: true, pid: process.pid });
@@ -208,6 +239,70 @@ export async function main(): Promise<void> {
     console.error(`[gate-keeper] IPC ready on 127.0.0.1:${IPC_PORT}`);
     console.error(`[gate-keeper] Min rating: ${config.minRating} (edit ${CONFIG_FILE} to change)`);
   });
+
+  // Quality Loop IPC endpoints
+  if (orchestrator) {
+    ipc.get('/api/quality/queue', (_req, res) => {
+      const items = orchestrator!.getQueueItems();
+      res.json({ items });
+    });
+
+    ipc.get('/api/quality/status', (_req, res) => {
+      const stats = orchestrator!.stats;
+      res.json({ stats, running: orchestrator!.isRunning, paused: orchestrator!.isPaused });
+    });
+
+    ipc.post('/api/quality/start', (_req, res) => {
+      if (!orchestrator!.isRunning) orchestrator!.start();
+      res.json({ ok: true });
+    });
+
+    ipc.post('/api/quality/stop', (_req, res) => {
+      orchestrator!.stop();
+      res.json({ ok: true });
+    });
+
+    ipc.post('/api/quality/pause', (_req, res) => {
+      orchestrator!.pause();
+      res.json({ ok: true });
+    });
+
+    ipc.post('/api/quality/resume', (_req, res) => {
+      orchestrator!.resume();
+      res.json({ ok: true });
+    });
+
+    ipc.post('/api/quality/enqueue', async (_req, res) => {
+      const count = await orchestrator!.enqueueRepos();
+      res.json({ ok: true, enqueued: count });
+    });
+
+    ipc.post('/api/quality/reset', (_req, res) => {
+      const count = orchestrator!.resetFailed();
+      res.json({ ok: true, reset: count });
+    });
+
+    ipc.get('/api/quality/trends', (_req, res) => {
+      res.json(orchestrator!.getTrends());
+    });
+
+    ipc.get('/api/quality/attempts/:id', (req, res) => {
+      const id = parseInt(req.params['id']!, 10);
+      if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
+      res.json(orchestrator!.getAttempts(id));
+    });
+
+    ipc.get('/api/quality/config', (_req, res) => {
+      res.json(orchestrator!.getConfig());
+    });
+
+    ipc.post('/api/quality/config', (req, res) => {
+      const { threshold, maxWorkers } = req.body as { threshold?: number; maxWorkers?: number };
+      if (threshold != null) orchestrator!.updateConfig({ threshold });
+      if (maxWorkers != null) orchestrator!.updateConfig({ maxWorkers });
+      res.json({ ok: true, config: orchestrator!.getConfig() });
+    });
+  }
 
   // Only register signal handlers once per process
   if (process._gateKeeperSignalsRegistered !== true) {

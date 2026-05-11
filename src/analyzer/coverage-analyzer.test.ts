@@ -576,6 +576,302 @@ end_of_record
     });
   });
 
+  describe('findProjectRoot', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('should find directory containing package.json', () => {
+      const tempDir = '/tmp/test-find-root-pkg';
+      const subDir = path.join(tempDir, 'src', 'nested');
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'package.json'), '{}');
+
+      const result = (analyzer as any).findProjectRoot(path.join(subDir, 'file.ts'));
+      expect(result).toBe(tempDir);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should find directory containing .csproj', () => {
+      const tempDir = '/tmp/test-find-root-csproj';
+      const subDir = path.join(tempDir, 'src');
+      fs.mkdirSync(subDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'App.csproj'), '<Project/>');
+
+      const result = (analyzer as any).findProjectRoot(path.join(subDir, 'file.cs'));
+      expect(result).toBe(tempDir);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('findLcovFile', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('should find coverage/lcov.info', () => {
+      const tempDir = '/tmp/test-find-lcov-1';
+      fs.mkdirSync(path.join(tempDir, 'coverage'), { recursive: true });
+      const lcovPath = path.join(tempDir, 'coverage', 'lcov.info');
+      fs.writeFileSync(lcovPath, '');
+
+      const result = (analyzer as any).findLcovFile(tempDir);
+      expect(result).toBe(lcovPath);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should return null when no LCOV present', () => {
+      const tempDir = '/tmp/test-find-lcov-none';
+      fs.mkdirSync(tempDir, { recursive: true });
+
+      const result = (analyzer as any).findLcovFile(tempDir);
+      expect(result).toBeNull();
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('loadCoverageData', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('should parse and cache LCOV file', () => {
+      const tempDir = '/tmp/test-load-cov';
+      fs.mkdirSync(path.join(tempDir, 'coverage'), { recursive: true });
+      const lcov = `SF:/x/foo.ts\nDA:1,1\nLF:1\nLH:1\nend_of_record\n`;
+      fs.writeFileSync(path.join(tempDir, 'coverage', 'lcov.info'), lcov);
+
+      const map1 = (analyzer as any).loadCoverageData(tempDir);
+      expect(map1).not.toBeNull();
+      expect(map1.size).toBe(1);
+
+      // Second call should hit the cache (same mtime)
+      const map2 = (analyzer as any).loadCoverageData(tempDir);
+      expect(map2).toBe(map1);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should return null when no LCOV exists', () => {
+      const tempDir = '/tmp/test-load-cov-empty';
+      fs.mkdirSync(tempDir, { recursive: true });
+
+      const result = (analyzer as any).loadCoverageData(tempDir);
+      expect(result).toBeNull();
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('findTestFile', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('should find sibling .test.ts file', () => {
+      const tempDir = '/tmp/test-find-sibling';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'foo.ts'), '');
+      const testPath = path.join(tempDir, 'foo.test.ts');
+      fs.writeFileSync(testPath, '');
+
+      const result = (analyzer as any).findTestFile(path.join(tempDir, 'foo.ts'), tempDir);
+      expect(result).toBe(testPath);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should find sibling C# Tests.cs file', () => {
+      const tempDir = '/tmp/test-find-sibling-cs';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'Foo.cs'), '');
+      const testPath = path.join(tempDir, 'FooTests.cs');
+      fs.writeFileSync(testPath, '');
+
+      const result = (analyzer as any).findTestFile(path.join(tempDir, 'Foo.cs'), tempDir);
+      expect(result).toBe(testPath);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should find test in __tests__ directory', () => {
+      const tempDir = '/tmp/test-find-tests-dir';
+      const testsDir = path.join(tempDir, '__tests__');
+      fs.mkdirSync(testsDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'bar.ts'), '');
+      const testPath = path.join(testsDir, 'bar.test.ts');
+      fs.writeFileSync(testPath, '');
+
+      const result = (analyzer as any).findTestFile(path.join(tempDir, 'bar.ts'), tempDir);
+      expect(result).toBe(testPath);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should return null when no test file exists', () => {
+      const tempDir = '/tmp/test-find-none';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'lonely.ts'), '');
+
+      const result = (analyzer as any).findTestFile(path.join(tempDir, 'lonely.ts'), tempDir);
+      expect(result).toBeNull();
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('removeDirSync', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('should remove an existing directory recursively', () => {
+      const tempDir = '/tmp/test-remove-dir';
+      fs.mkdirSync(path.join(tempDir, 'nested'), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'nested', 'a.txt'), 'x');
+
+      (analyzer as any).removeDirSync(tempDir);
+      expect(fs.existsSync(tempDir)).toBe(false);
+    });
+
+    it('should silently ignore missing directories', () => {
+      expect(() => (analyzer as any).removeDirSync('/tmp/does-not-exist-xyz')).not.toThrow();
+    });
+  });
+
+  describe('checkCoverage (integration)', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('should return null for test files', async () => {
+      const result = await analyzer.checkCoverage('/src/foo.test.ts');
+      expect(result).toBeNull();
+    });
+
+    it('should return null for config files', async () => {
+      const result = await analyzer.checkCoverage('/project/jest.config.js');
+      expect(result).toBeNull();
+    });
+
+    it('should return null when project root cannot be found', async () => {
+      const tempDir = '/tmp/test-no-root-xyz';
+      fs.mkdirSync(tempDir, { recursive: true });
+      const result = await analyzer.checkCoverage(path.join(tempDir, 'foo.ts'));
+      expect(result).toBeNull();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should warn no_test_coverage when LCOV exists but lacks this file', async () => {
+      const tempDir = '/tmp/test-check-no-cov';
+      fs.mkdirSync(path.join(tempDir, 'coverage'), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'package.json'), '{}');
+      fs.writeFileSync(path.join(tempDir, 'src.ts'), '');
+      fs.writeFileSync(
+        path.join(tempDir, 'coverage', 'lcov.info'),
+        'SF:other.ts\nDA:1,1\nLF:1\nLH:1\nend_of_record\n',
+      );
+
+      const result = await analyzer.checkCoverage(path.join(tempDir, 'src.ts'));
+      expect(result?.violations[0].type).toBe('no_test_coverage');
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should use LCOV data when present for the file', async () => {
+      const tempDir = '/tmp/test-check-with-cov';
+      fs.mkdirSync(path.join(tempDir, 'coverage'), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'package.json'), '{}');
+      const sourcePath = path.join(tempDir, 'src.ts');
+      fs.writeFileSync(sourcePath, '');
+      fs.writeFileSync(
+        path.join(tempDir, 'coverage', 'lcov.info'),
+        `SF:${sourcePath}\nDA:1,1\nDA:2,1\nLF:2\nLH:2\nend_of_record\n`,
+      );
+
+      const result = await analyzer.checkCoverage(sourcePath);
+      expect(result?.coveragePercent).toBe(100);
+      expect(result?.violations.length).toBe(0);
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should warn no_test_file when no LCOV and no sibling test', async () => {
+      const tempDir = '/tmp/test-check-no-test';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'package.json'), '{}');
+      const sourcePath = path.join(tempDir, 'orphan.ts');
+      fs.writeFileSync(sourcePath, '');
+
+      const result = await analyzer.checkCoverage(sourcePath);
+      expect(result?.violations[0].type).toBe('no_test_file');
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should error hollow_test_file when test file has no real assertions', async () => {
+      const tempDir = '/tmp/test-check-hollow';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'package.json'), '{}');
+      const sourcePath = path.join(tempDir, 'thing.ts');
+      fs.writeFileSync(sourcePath, '');
+      fs.writeFileSync(path.join(tempDir, 'thing.test.ts'), '// nothing here\n');
+
+      const result = await analyzer.checkCoverage(sourcePath);
+      expect(result?.violations[0].type).toBe('hollow_test_file');
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should skip [ExcludeFromCodeCoverage] C# files', async () => {
+      const tempDir = '/tmp/test-check-excluded';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(path.join(tempDir, 'App.csproj'), '<Project/>');
+      const sourcePath = path.join(tempDir, 'Excluded.cs');
+      fs.writeFileSync(sourcePath, '[ExcludeFromCodeCoverage]\npublic class X {}\n');
+
+      const result = await analyzer.checkCoverage(sourcePath);
+      expect(result).toBeNull();
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
+  describe('buildRunnerArgs (nyc)', () => {
+    it('should return null for nyc runner', () => {
+      const args = (analyzer as any).buildRunnerArgs('nyc', '/x/foo.test.ts', 'x/foo.ts', '/tmp/cov');
+      expect(args).toBeNull();
+    });
+  });
+
+  describe('detectTestRunner edge cases', () => {
+    const fs = require('fs');
+    it('should return null when package.json is missing', () => {
+      const result = (analyzer as any).detectTestRunner('/tmp/test-no-pkg-xyz');
+      expect(result).toBeNull();
+    });
+
+    it('should return null when package.json is malformed', () => {
+      const tempDir = '/tmp/test-bad-pkg';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(tempDir + '/package.json', '{not json');
+
+      const result = (analyzer as any).detectTestRunner(tempDir);
+      expect(result).toBeNull();
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('should detect nyc/c8', () => {
+      const tempDir = '/tmp/test-nyc-detect';
+      fs.mkdirSync(tempDir, { recursive: true });
+      fs.writeFileSync(tempDir + '/package.json', JSON.stringify({ devDependencies: { c8: '^8.0.0' } }));
+
+      const result = (analyzer as any).detectTestRunner(tempDir);
+      expect(result).toBe('nyc');
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+  });
+
   describe('clearCache', () => {
     it('should clear the coverage cache', () => {
       (analyzer as any).coverageCache.set('test-project', new Map());

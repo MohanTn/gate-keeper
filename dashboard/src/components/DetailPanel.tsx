@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, memo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState, memo } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
 import { ThemeTokens, useTheme, ratingColor, healthLabel } from '../ThemeContext';
 
@@ -38,14 +38,16 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
     return tgt === node.id;
   });
 
-  const handleCloseBtnEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.borderColor = T.borderBright;
-    e.currentTarget.style.color = T.text;
-  }, [T.borderBright, T.text]);
-  const handleCloseBtnLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.borderColor = T.border;
-    e.currentTarget.style.color = T.textMuted;
-  }, [T.border, T.textMuted]);
+  const closeBtnHandlers = useMemo(() => ({
+    onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.borderColor = T.borderBright;
+      e.currentTarget.style.color = T.text;
+    },
+    onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.borderColor = T.border;
+      e.currentTarget.style.color = T.textMuted;
+    },
+  }), [T.borderBright, T.text, T.border, T.textMuted]);
 
   return (
     <div
@@ -64,8 +66,7 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
               background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
               borderRadius: 4, padding: '4px 10px', cursor: 'pointer', fontSize: 11,
             }}
-            onMouseEnter={handleCloseBtnEnter}
-            onMouseLeave={handleCloseBtnLeave}
+            {...closeBtnHandlers}
           >
             Close
           </button>
@@ -332,12 +333,14 @@ function DepRow({ label, rating, clickable, onClick }: {
   label: string; rating?: number; clickable: boolean; onClick: () => void;
 }) {
   const { T } = useTheme();
-  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (clickable) e.currentTarget.style.background = T.panelHover;
-  }, [clickable, T.panelHover]);
-  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    e.currentTarget.style.background = 'transparent';
-  }, []);
+  const hoverHandlers = useMemo(() => ({
+    onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) => {
+      if (clickable) e.currentTarget.style.background = T.panelHover;
+    },
+    onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
+      e.currentTarget.style.background = 'transparent';
+    },
+  }), [clickable, T.panelHover]);
   return (
     <div
       onClick={clickable ? onClick : undefined}
@@ -346,8 +349,7 @@ function DepRow({ label, rating, clickable, onClick }: {
         padding: '5px 8px', borderRadius: 5, cursor: clickable ? 'pointer' : 'default',
         fontSize: 13, color: clickable ? T.accent : T.textDim,
       }}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
+      {...hoverHandlers}
     >
       <span>→ {label}</span>
       {rating != null && (

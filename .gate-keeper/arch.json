@@ -197,7 +197,21 @@
     "src/mcp/handlers/graph.ts": "interface",
     "src/mcp/handlers/impact.ts": "interface",
     "src/mcp/handlers/impact-format.ts": "interface",
-    "src/mcp/handlers/impact-format.test.ts": "interface"
+    "src/mcp/handlers/impact-format.test.ts": "interface",
+    "src/quality-loop/orchestrator.ts": "usecase",
+    "dashboard/src/components/AppHeader.test.tsx": "interface",
+    "dashboard/src/components/QualityDashboard.tsx": "interface",
+    "dashboard/src/components/QualityProgressCard.tsx": "interface",
+    "dashboard/src/components/QualityQueuePanel.tsx": "interface",
+    "dashboard/src/components/QualityTrendChart.tsx": "interface",
+    "dashboard/src/hooks/useQualityWebSocket.ts": "usecase",
+    "src/cache/quality-cache.ts": "usecase",
+    "src/quality-loop/file-lock.ts": "usecase",
+    "src/quality-loop/fix-worker.test.ts": "usecase",
+    "src/quality-loop/fix-worker.ts": "usecase",
+    "src/quality-loop/orchestrator.test.ts": "usecase",
+    "src/quality-loop/queue-manager.test.ts": "usecase",
+    "src/quality-loop/queue-manager.ts": "usecase"
   },
   "overrides": {}
 }

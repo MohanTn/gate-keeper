@@ -23,12 +23,50 @@ export function makeNodeColor(color: string, theme: ThemeTokens = T) {
 
 export function edgeId(from: string, to: string) { return `${from}→${to}`; }
 
+export interface VisNodeColor {
+    background: string;
+    border: string;
+    highlight: { background: string; border: string };
+    hover: { background: string; border: string };
+}
+
+export interface VisNode {
+    id: string;
+    label: string;
+    x: number;
+    y: number;
+    title: string;
+    shape: string;
+    color: VisNodeColor;
+    font: { color: string; size: number; face: string };
+    borderWidth: number;
+    borderWidthSelected: number;
+    margin: { top: number; right: number; bottom: number; left: number };
+    shapeProperties: { borderRadius: number };
+    mass: number;
+    physics: boolean;
+    fixed: boolean;
+    widthConstraint: { minimum: number; maximum: number };
+}
+
+export interface VisEdge {
+    id: string;
+    from: string;
+    to: string;
+    color: { color: string; highlight: string; hover: string };
+    width: number;
+    arrows: { to: { enabled: boolean; scaleFactor: number; type: string } };
+    smooth: { enabled: boolean; type: string; forceDirection: string; roundness: number };
+    dashes: number[] | boolean;
+    _isCircular: boolean;
+}
+
 export function buildVisNodes(
     nodes: GraphNode[],
     pinned: Map<string, { x: number; y: number }>,
     treePositions: Map<string, { x: number; y: number }>,
     theme: ThemeTokens = T,
-): any[] {
+): VisNode[] {
     // For large graphs without layout positions, use a grid scatter
     const needsScatter = treePositions.size === 0 && nodes.length > 200;
     const cols = needsScatter ? Math.ceil(Math.sqrt(nodes.length)) : 0;
@@ -59,14 +97,15 @@ export function buildVisNodes(
     });
 }
 
-export function buildVisEdges(graphData: GraphData, theme: ThemeTokens = T): any[] {
+export function buildVisEdges(graphData: GraphData, theme: ThemeTokens = T): VisEdge[] {
     return graphData.edges.map(edge => {
         const from = typeof edge.source === 'string' ? edge.source : edge.source?.id;
         const to = typeof edge.target === 'string' ? edge.target : edge.target?.id;
         const isCirc = edge.type === 'circular';
         return {
             id: edgeId(from as string, to as string),
-            from, to,
+            from: from as string,
+            to: to as string,
             color: {
                 color: isCirc ? theme.edgeCircular : theme.edgeDefault,
                 highlight: isCirc ? 'rgba(249,115,22,1)' : theme.edgeHighlight,

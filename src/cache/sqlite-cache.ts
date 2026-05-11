@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
 import { FileAnalysis, RepoMetadata } from '../types';
+import { QualityCache } from './quality-cache';
 
 interface RepoRow {
   id: string;
@@ -16,6 +17,7 @@ interface RepoRow {
   is_active: number;
 }
 
+
 const DB_PATH = path.join(
   process.env.HOME ?? '/tmp',
   '.gate-keeper',
@@ -24,12 +26,14 @@ const DB_PATH = path.join(
 
 export class SqliteCache {
   private db: Database.Database;
+  readonly quality: QualityCache;
 
   constructor(dbPath = DB_PATH) {
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
     this.db = new Database(dbPath);
     this.migrate();
     this.init();
+    this.quality = new QualityCache(this.db);
   }
 
   private migrate(): void {
@@ -38,6 +42,13 @@ export class SqliteCache {
     if (cols.length > 0 && !cols.some(c => c.name === 'repo')) {
       this.db.exec('DROP TABLE IF EXISTS analyses; DROP TABLE IF EXISTS rating_history;');
     }
+    // Add worker_output column to quality_attempt_log if missing
+    try {
+      const alCols = this.db.prepare('PRAGMA table_info(quality_attempt_log)').all() as { name: string }[];
+      if (!alCols.some(c => c.name === 'worker_output')) {
+        this.db.exec('ALTER TABLE quality_attempt_log ADD COLUMN worker_output TEXT');
+      }
+    } catch { /* table may not exist yet, init() will create it */ }
   }
 
   private init(): void {
@@ -86,6 +97,72 @@ export class SqliteCache {
       CREATE INDEX IF NOT EXISTS idx_rh_time       ON rating_history(recorded_at);
       CREATE INDEX IF NOT EXISTS idx_repos_session ON repositories(session_id);
       CREATE INDEX IF NOT EXISTS idx_repos_active  ON repositories(is_active);
+
+      CREATE TABLE IF NOT EXISTS quality_queue (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo            TEXT    NOT NULL,
+        file_path       TEXT    NOT NULL,
+        current_rating  REAL    NOT NULL,
+        target_rating   REAL    NOT NULL DEFAULT 7.0,
+        priority_score  REAL    NOT NULL DEFAULT 0,
+        status          TEXT    NOT NULL DEFAULT 'pending',
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        max_attempts    INTEGER NOT NULL DEFAULT 3,
+        worker_id       TEXT,
+        locked_at       INTEGER,
+        error_message   TEXT,
+        completed_at    INTEGER,
+        created_at      INTEGER NOT NULL,
+        UNIQUE(repo, file_path)
+      );
+
+      CREATE TABLE IF NOT EXISTS quality_attempt_log (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        queue_id            INTEGER NOT NULL REFERENCES quality_queue(id),
+        attempt             INTEGER NOT NULL,
+        rating_before       REAL    NOT NULL,
+        rating_after        REAL,
+        violations_fixed    INTEGER DEFAULT 0,
+        violations_remaining INTEGER DEFAULT 0,
+        fix_summary         TEXT,
+        error_message       TEXT,
+        duration_ms         INTEGER,
+        worker_output       TEXT,
+        created_at          INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS quality_trend (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        repo            TEXT    NOT NULL,
+        overall_rating  REAL    NOT NULL,
+        files_total     INTEGER NOT NULL,
+        files_passed    INTEGER NOT NULL,
+        files_failed    INTEGER NOT NULL,
+        files_pending   INTEGER NOT NULL,
+        recorded_at     INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS quality_checkpoints (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        reason          TEXT    NOT NULL,
+        queue_snapshot  TEXT    NOT NULL,
+        files_fixed     INTEGER NOT NULL,
+        overall_rating  REAL    NOT NULL,
+        created_at      INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS quality_file_locks (
+        file_path       TEXT    PRIMARY KEY,
+        worker_id       TEXT    NOT NULL,
+        locked_at       INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_qq_status       ON quality_queue(status);
+      CREATE INDEX IF NOT EXISTS idx_qq_priority     ON quality_queue(priority_score DESC);
+      CREATE INDEX IF NOT EXISTS idx_qq_repo         ON quality_queue(repo);
+      CREATE INDEX IF NOT EXISTS idx_qal_queue_id    ON quality_attempt_log(queue_id);
+      CREATE INDEX IF NOT EXISTS idx_qt_recorded_at  ON quality_trend(recorded_at);
+      CREATE INDEX IF NOT EXISTS idx_qc_created_at   ON quality_checkpoints(created_at);
 
       CREATE TABLE IF NOT EXISTS exclude_patterns (
         id      INTEGER PRIMARY KEY AUTOINCREMENT,
