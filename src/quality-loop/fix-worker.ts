@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { spawn, execSync } from 'child_process';
 import { FileAnalysis, WorkerResult } from '../types';
+import { fixText } from '../util/fix-text';
 
 const DAEMON_IPC = 'http://127.0.0.1:5379';
 const VIZ_API = 'http://127.0.0.1:5378';
@@ -59,9 +60,10 @@ export class FixWorker {
       };
     }
 
-    const numberedViolations = analysis.violations.map((v, i) =>
-      `${i + 1}. [${v.severity.toUpperCase()}]${v.line ? ` (line ${v.line})` : ''}: ${v.message}${v.fix ? `\n   Fix: ${v.fix}` : ''}`
-    ).join('\n');
+    const numberedViolations = analysis.violations.map((v, i) => {
+      const t = fixText(v.fix);
+      return `${i + 1}. [${v.severity.toUpperCase()}]${v.line ? ` (line ${v.line})` : ''}: ${v.message}${t ? `\n   Fix: ${t}` : ''}`;
+    }).join('\n');
 
     const prompt = `fix all violation going on in this file @${this.filePath}
 File: ${this.filePath}
@@ -130,7 +132,7 @@ ${numberedViolations}`;
       // Single-quoted variable references inside the heredoc are intentional:
       // they expand at bash runtime (inside the terminal), not at Node write time.
       fs.writeFileSync(handle.scriptFile, `#!/usr/bin/env bash
-source ~/.bashrc 2>/dev/null || true
+# Note: this script is invoked via "bash -i" so ~/.bashrc is sourced automatically.
 set -uo pipefail
 
 PROMPT_FILE='${handle.promptFile}'
@@ -301,28 +303,24 @@ read -r || true`, 'utf8');
   // ── Terminal openers ───────────────────────────────────────────────────────
 
   private tryOpenWSL(scriptPath: string): boolean {
-    // Strategy 1: Windows Terminal (wt.exe) — best UX on Win11 / Win10
+    // Strategy 1: cmd.exe /c start — opens a new CMD window (most reliable on WSL)
     try {
-      execSync(`command -v wt.exe 2>/dev/null`, { timeout: 1000 });
-      spawn('wt.exe', ['-d', '.', 'wsl.exe', 'bash', scriptPath], { detached: true, stdio: 'ignore' }).unref();
-      return true;
-    } catch { /* wt.exe not available */ }
-
-    // Strategy 2: cmd.exe /c start — works on every Windows
-    try {
-      spawn('cmd.exe', [
-        '/c', 'start', 'Claude Fix', 'cmd', '/c',
-        `wsl.exe bash "${scriptPath}" & pause`,
-      ], { detached: true, stdio: 'ignore' }).unref();
+      spawn('cmd.exe', ['/c', 'start', '', 'cmd', '/k', 'wsl.exe', 'bash', '-i', scriptPath], { detached: true, stdio: 'ignore' }).unref();
       return true;
     } catch { /* cmd.exe not available */ }
 
+    // Strategy 2: Windows Terminal (wt.exe) — best UX on Win11 / Win10 if available
+    try {
+      execSync(`command -v wt.exe 2>/dev/null`, { timeout: 1000 });
+      spawn('wt.exe', ['-w', '0', 'nt', '--', 'wsl.exe', 'bash', '-i', scriptPath], { detached: true, stdio: 'ignore' }).unref();
+      return true;
+    } catch { /* wt.exe not available */ }
+
     // Strategy 3: powershell Start-Process (fallback)
     try {
-      spawn('powershell.exe', [
-        '-NoProfile', '-Command',
-        `Start-Process cmd -WindowStyle Normal -ArgumentList '/c wsl.exe bash "${scriptPath}" & pause'`,
-      ], { detached: true, stdio: 'ignore' }).unref();
+      spawn('powershell.exe', ['-NoProfile', '-Command',
+        `Start-Process cmd -ArgumentList '/k wsl.exe bash -i \\"${scriptPath}\\"'`],
+      { detached: true, stdio: 'ignore' }).unref();
       return true;
     } catch { /* powershell.exe not available */ }
 
@@ -331,10 +329,10 @@ read -r || true`, 'utf8');
 
   private tryOpenLinux(scriptPath: string): boolean {
     const terminals: Array<[string, string[]]> = [
-      ['gnome-terminal', ['--', 'bash', scriptPath]],
-      ['konsole',        ['--hold', '-e', 'bash', scriptPath]],
-      ['xterm',          ['-e', `bash "${scriptPath}"`]],
-      ['x-terminal-emulator', ['-e', `bash "${scriptPath}"`]],
+      ['gnome-terminal', ['--', 'bash', '-i', scriptPath]],
+      ['konsole',        ['--hold', '-e', 'bash', '-i', scriptPath]],
+      ['xterm',          ['-e', `bash -i "${scriptPath}"`]],
+      ['x-terminal-emulator', ['-e', `bash -i "${scriptPath}"`]],
     ];
 
     for (const [bin, args] of terminals) {
@@ -347,7 +345,7 @@ read -r || true`, 'utf8');
 
     // Last resort: spawn bash without a new window (headless CI / no display)
     try {
-      spawn('bash', [scriptPath], { detached: true, stdio: 'ignore' }).unref();
+      spawn('bash', ['-i', scriptPath], { detached: true, stdio: 'ignore' }).unref();
       return true;
     } catch {
       return false;

@@ -1,9 +1,25 @@
 import * as path from 'path';
-import { FileAnalysis, Language } from '../types';
+import * as fs from 'fs';
+import * as crypto from 'crypto';
+import { FileAnalysis, Language, Violation } from '../types';
 import { TypeScriptAnalyzer } from './typescript-analyzer';
 import { CSharpAnalyzer, CSharpAnalysisResult } from './csharp-analyzer';
 import { CoverageAnalyzer } from './coverage-analyzer';
 import { RatingCalculator } from '../rating/rating-calculator';
+
+const ANALYZER_VERSION = '2.0';
+const SEVERITY_WEIGHT: Record<Violation['severity'], number> = {
+  error: 1.5,
+  warning: 0.5,
+  info: 0.1,
+};
+
+function priorityFor(v: Violation): number {
+  const weight = SEVERITY_WEIGHT[v.severity] ?? 0.1;
+  const isDeterministic =
+    typeof v.fix === 'object' && v.fix?.confidence === 'deterministic';
+  return weight / (isDeterministic ? 1 : 3);
+}
 
 const SUPPORTED_EXTENSIONS: Record<string, Language> = {
   '.ts': 'typescript',
@@ -12,6 +28,23 @@ const SUPPORTED_EXTENSIONS: Record<string, Language> = {
   '.js': 'typescript',
   '.cs': 'csharp'
 };
+
+function enrichCodeSnippets(violations: Violation[], filePath: string): void {
+  const withSpans = violations.some(v => v.span);
+  if (!withSpans) return;
+  let lines: string[];
+  try {
+    lines = fs.readFileSync(filePath, 'utf8').split('\n');
+  } catch {
+    return;
+  }
+  for (const v of violations) {
+    if (!v.span || v.codeSnippet) continue;
+    const start = Math.max(0, v.span.line - 2);
+    const end = Math.min(lines.length, v.span.endLine + 1);
+    v.codeSnippet = lines.slice(start, end).join('\n');
+  }
+}
 
 export class UniversalAnalyzer {
   private tsAnalyzer = new TypeScriptAnalyzer();
@@ -46,7 +79,25 @@ export class UniversalAnalyzer {
         }
       }
 
-      const rating = this.ratingCalc.calculate(result.violations, result.metrics, result.dependencies);
+      enrichCodeSnippets(result.violations, filePath);
+
+      for (const v of result.violations) {
+        v.priorityScore = priorityFor(v);
+      }
+      result.violations.sort((a, b) => (b.priorityScore ?? 0) - (a.priorityScore ?? 0));
+
+      const { rating, breakdown } = this.ratingCalc.calculateWithBreakdown(
+        result.violations,
+        result.metrics,
+        result.dependencies
+      );
+
+      let fileHash: string | undefined;
+      try {
+        fileHash = crypto.createHash('sha1').update(fs.readFileSync(filePath)).digest('hex');
+      } catch {
+        fileHash = undefined;
+      }
 
       const analysis: FileAnalysis = {
         path: filePath,
@@ -55,7 +106,10 @@ export class UniversalAnalyzer {
         metrics: result.metrics,
         violations: result.violations,
         rating,
-        analyzedAt: Date.now()
+        analyzedAt: Date.now(),
+        ratingBreakdown: breakdown,
+        fileHash,
+        analyzerVersion: ANALYZER_VERSION,
       };
 
       // Attach defined types for C# files (used for cross-file dependency resolution)

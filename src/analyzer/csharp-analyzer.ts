@@ -1,7 +1,36 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
-import { Dependency, Metrics, Violation } from '../types';
+import { Dependency, Metrics, Span, Violation } from '../types';
+
+const RULE_ID_MAP: Record<string, string> = {
+  god_class: 'cs/god-class',
+  long_method: 'cs/long-method',
+  tight_coupling: 'cs/tight-coupling',
+  magic_number: 'cs/magic-number',
+  empty_catch: 'cs/empty-catch',
+  todo_placeholder: 'cs/no-todo',
+  tech_debt_marker: 'cs/tech-debt',
+  unimplemented_stub: 'cs/no-stub',
+};
+
+function offsetToSpan(content: string, offset: number, length: number): Span {
+  const before = content.substring(0, offset);
+  const linesBefore = before.split('\n');
+  const line = linesBefore.length;
+  const column = linesBefore[linesBefore.length - 1].length + 1;
+  const matchText = content.substring(offset, offset + length);
+  const matchLines = matchText.split('\n');
+  const endLine = line + matchLines.length - 1;
+  const endColumn = matchLines.length === 1
+    ? column + length
+    : matchLines[matchLines.length - 1].length + 1;
+  return { line, column, endLine, endColumn, offset, length };
+}
+
+function lineSpan(line: number, column: number, length: number): Span {
+  return { line, column, endLine: line, endColumn: column + length };
+}
 
 export interface CSharpAnalysisResult {
   dependencies: Dependency[];
@@ -227,9 +256,11 @@ export class CSharpAnalyzer {
       if (incompleteMatch) {
         violations.push({
           type: 'todo_placeholder',
+          ruleId: RULE_ID_MAP.todo_placeholder,
           severity: 'warning',
           message: `${incompleteMatch[1].toUpperCase()} marker at line ${lineNum} — resolve before merging`,
           line: lineNum,
+          span: lineSpan(lineNum, (incompleteMatch.index ?? 0) + 1, incompleteMatch[0].length),
           fix: 'Replace with the actual implementation'
         });
         continue;
@@ -239,20 +270,25 @@ export class CSharpAnalyzer {
       if (debtMatch) {
         violations.push({
           type: 'tech_debt_marker',
+          ruleId: RULE_ID_MAP.tech_debt_marker,
           severity: 'info',
           message: `${debtMatch[1].toUpperCase()} marker at line ${lineNum} — track in your issue tracker`,
           line: lineNum,
+          span: lineSpan(lineNum, (debtMatch.index ?? 0) + 1, debtMatch[0].length),
           fix: 'Create a tracking issue and replace with a proper solution'
         });
         continue;
       }
 
-      if (notImplPattern.test(line)) {
+      const stubMatch = notImplPattern.exec(line);
+      if (stubMatch) {
         violations.push({
           type: 'unimplemented_stub',
+          ruleId: RULE_ID_MAP.unimplemented_stub,
           severity: 'error',
           message: `Unimplemented stub at line ${lineNum} — NotImplementedException will throw at runtime`,
           line: lineNum,
+          span: lineSpan(lineNum, (stubMatch.index ?? 0) + 1, stubMatch[0].length),
           fix: 'Implement the required functionality'
         });
       }
@@ -262,11 +298,19 @@ export class CSharpAnalyzer {
   private detectGodClass(content: string, lines: string[], violations: Violation[]): void {
     const methodMatches = content.match(/\b(public|private|protected)\s+[\w<>\[\]?]+\s+\w+\s*\(/g) || [];
     if (methodMatches.length > 20) {
+      // Anchor at the first class/struct/record/interface declaration; fall back to file start.
+      const declMatch = /\b(class|struct|record|interface)\s+\w+/.exec(content);
+      const span = declMatch
+        ? offsetToSpan(content, declMatch.index, declMatch[0].length)
+        : lineSpan(1, 1, 1);
       violations.push({
         type: 'god_class',
+        ruleId: RULE_ID_MAP.god_class,
         severity: 'warning',
         message: `Class has ${methodMatches.length} methods — consider splitting responsibilities (Single Responsibility Principle)`,
-        fix: 'Extract related methods into separate focused classes'
+        line: span.line,
+        span,
+        fix: 'Extract related methods into separate focused classes (structural — review whole class)'
       });
     }
   }
@@ -294,11 +338,19 @@ export class CSharpAnalyzer {
         if (braceDepth === 0 && i > methodStart) {
           const methodLength = i - methodStart;
           if (methodLength > 50) {
+            const startCol = lines[methodStart].search(/\S/) + 1 || 1;
             violations.push({
               type: 'long_method',
+              ruleId: RULE_ID_MAP.long_method,
               severity: 'warning',
               message: `Method starting at line ${methodStart + 1} is ${methodLength} lines long — extract logic into smaller methods`,
               line: methodStart + 1,
+              span: {
+                line: methodStart + 1,
+                column: startCol,
+                endLine: i + 1,
+                endColumn: (lines[i]?.length ?? 0) + 1,
+              },
               fix: 'Extract cohesive logic blocks into private helper methods'
             });
           }
@@ -316,12 +368,14 @@ export class CSharpAnalyzer {
     while ((match = ctorRegex.exec(content)) !== null) {
       const params = match[1].split(',').filter(p => p.trim().length > 0);
       if (params.length > 5) {
-        const lineNum = content.substring(0, match.index).split('\n').length;
+        const span = offsetToSpan(content, match.index, match[0].length);
         violations.push({
           type: 'tight_coupling',
+          ruleId: RULE_ID_MAP.tight_coupling,
           severity: 'warning',
           message: `Constructor has ${params.length} parameters — consider using a configuration object or DI container`,
-          line: lineNum,
+          line: span.line,
+          span,
           fix: 'Group related parameters into a settings/options class or use the Builder pattern'
         });
       }
@@ -333,12 +387,16 @@ export class CSharpAnalyzer {
     let match: RegExpExecArray | null;
 
     while ((match = magicNumberRegex.exec(content)) !== null) {
-      const lineNum = content.substring(0, match.index).split('\n').length;
+      // Magic number capture is match[1]; locate it relative to match.index.
+      const numberOffset = match.index + match[0].indexOf(match[1]);
+      const span = offsetToSpan(content, numberOffset, match[1].length);
       violations.push({
         type: 'magic_number',
+        ruleId: RULE_ID_MAP.magic_number,
         severity: 'info',
         message: `Magic number ${match[1]} — extract to a named constant`,
-        line: lineNum,
+        line: span.line,
+        span,
         fix: 'Replace with a descriptive constant: const int MaxRetries = ...'
       });
     }
@@ -349,12 +407,14 @@ export class CSharpAnalyzer {
     let match: RegExpExecArray | null;
 
     while ((match = emptyCatchRegex.exec(content)) !== null) {
-      const lineNum = content.substring(0, match.index).split('\n').length;
+      const span = offsetToSpan(content, match.index, match[0].length);
       violations.push({
         type: 'empty_catch',
+        ruleId: RULE_ID_MAP.empty_catch,
         severity: 'error',
         message: 'Empty catch block silently swallows exceptions',
-        line: lineNum,
+        line: span.line,
+        span,
         fix: 'At minimum, log the exception; consider rethrowing or handling appropriately'
       });
     }

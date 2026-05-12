@@ -87,6 +87,46 @@ export function findGitRoot(dir: string): string {
   return (result.status === 0 && result.stdout.trim()) ? result.stdout.trim() : dir;
 }
 
+// ── LCOV coverage watcher ──────────────────────────────────────────────────
+
+// Tracks every lcov path we are already polling to prevent duplicate watchers.
+const watchedLcovPaths = new Set<string>();
+// Per-repo debounce timers so rapid LCOV writes don't flood the scan pipeline.
+const lcovDebounceTimers = new Map<string, NodeJS.Timeout>();
+
+// Mirrors CoverageAnalyzer.findLcovFile() so the watcher covers the same search space.
+function coverageLcovCandidates(repoRoot: string): string[] {
+  return [
+    path.join(repoRoot, 'coverage', 'lcov.info'),
+    path.join(repoRoot, 'coverage', 'lcov-report', 'lcov.info'),
+    path.join(repoRoot, 'lcov.info'),
+    path.join(repoRoot, '.coverage', 'lcov.info'),
+  ];
+}
+
+// Uses fs.watchFile (stat-polling) instead of fs.watch (inotify) because inotify
+// silently drops events on WSL DrvFs/NFS mounts, while polling works everywhere.
+function startLcovWatcher(repoRoot: string, vizServer: VizServer): void {
+  for (const lcovPath of coverageLcovCandidates(repoRoot)) {
+    if (watchedLcovPaths.has(lcovPath)) continue;
+    watchedLcovPaths.add(lcovPath);
+
+    fs.watchFile(lcovPath, { persistent: false, interval: 5_000 }, (curr, prev) => {
+      if (curr.mtimeMs === prev.mtimeMs) return;
+
+      const existing = lcovDebounceTimers.get(repoRoot);
+      if (existing) clearTimeout(existing);
+      lcovDebounceTimers.set(repoRoot, setTimeout(() => {
+        lcovDebounceTimers.delete(repoRoot);
+        console.error(`[gate-keeper] Coverage changed for ${path.basename(repoRoot)} — re-analyzing...`);
+        vizServer.scanRepo(repoRoot, true).catch(err => {
+          console.error(`[gate-keeper] Coverage re-analysis error: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }, 2_000));
+    });
+  }
+}
+
 export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const noScan = args.includes('--no-scan');
@@ -105,27 +145,33 @@ export async function main(): Promise<void> {
 
   await vizServer.start();
 
-  // Quality Loop Orchestrator (started with --quality-loop)
-  let orchestrator: QualityOrchestrator | null = null;
-  if (qualityLoop) {
-    const qlConfig = loadQualityConfig();
-    if (qlConfig.repos.length === 0) {
-      // Auto-populate repos from registered repos, then fall back to analyzed repos
-      const registered = cache.getAllRepositories(true);
-      qlConfig.repos = registered.map(r => r.path);
-      if (qlConfig.repos.length === 0) {
-        qlConfig.repos = cache.getRepos();
-      }
-    }
-    orchestrator = new QualityOrchestrator(qlConfig, cache, {
-      broadcast: (msg) => vizServer.broadcastMessage(msg),
-      getAnalyzedFiles: (repo) => {
-        const analyses = cache.getAll(repo);
-        return analyses.map(a => ({ path: a.path, rating: a.rating, repoRoot: a.repoRoot ?? repo }));
-      },
-    });
-    console.error(`[gate-keeper] Quality loop ready (threshold: ${qlConfig.threshold}, workers: ${qlConfig.maxWorkers})`);
+  // Start LCOV watchers for all repos already in the cache so that running
+  // `npm test --coverage` automatically refreshes dashboard ratings.
+  for (const { path: r } of cache.getAllRepositories()) {
+    startLcovWatcher(r, vizServer);
   }
+
+  // Quality Loop Orchestrator — always available via dashboard
+  // Use --quality-loop to auto-start processing on daemon launch
+  const qlConfig = loadQualityConfig();
+  if (qlConfig.repos.length === 0) {
+    const registered = cache.getAllRepositories(true);
+    qlConfig.repos = registered.map(r => r.path);
+    if (qlConfig.repos.length === 0) {
+      qlConfig.repos = cache.getRepos();
+    }
+  }
+  const orchestrator = new QualityOrchestrator(qlConfig, cache, {
+    broadcast: (msg) => vizServer.broadcastMessage(msg),
+    getAnalyzedFiles: (repo) => {
+      const analyses = cache.getAll(repo);
+      return analyses.map(a => ({ path: a.path, rating: a.rating, repoRoot: a.repoRoot ?? repo }));
+    },
+  });
+  if (qualityLoop) {
+    orchestrator.start();
+  }
+  console.error(`[gate-keeper] Quality loop ready (threshold: ${qlConfig.threshold}, workers: ${qlConfig.maxWorkers}, auto-start: ${qualityLoop})`);
 
   if (!noScan) {
     // Initial workspace scan — runs in the background, non-blocking
@@ -178,6 +224,7 @@ export async function main(): Promise<void> {
 
       cache.saveRepository(metadata);
       vizServer.broadcastRepoCreated(metadata);
+      startLcovWatcher(metadata.path, vizServer);
 
       console.error(`[gate-keeper] Repository ${isNew ? 'registered' : 'updated'}: ${metadata.name} (${metadata.id})`);
 
@@ -235,74 +282,121 @@ export async function main(): Promise<void> {
     res.json({ repos });
   });
 
+  // Manually trigger a full re-analysis of all files in a repo so that coverage
+  // data changes (e.g. after running `npm test --coverage`) are reflected
+  // immediately without waiting for the next file-write event.
+  ipc.post('/reanalyze-coverage', (req, res) => {
+    const { repoRoot: reqRepo } = req.body as { repoRoot?: string };
+    const target = reqRepo || repoRoot;
+    res.json({ ok: true, message: `Re-analysis started for ${target}` });
+    vizServer.scanRepo(target, true).catch(err => {
+      console.error(`[gate-keeper] /reanalyze-coverage error: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  });
+
   ipc.listen(IPC_PORT, '127.0.0.1', () => {
     console.error(`[gate-keeper] IPC ready on 127.0.0.1:${IPC_PORT}`);
     console.error(`[gate-keeper] Min rating: ${config.minRating} (edit ${CONFIG_FILE} to change)`);
   });
 
   // Quality Loop IPC endpoints
-  if (orchestrator) {
-    ipc.get('/api/quality/queue', (_req, res) => {
-      const items = orchestrator!.getQueueItems();
-      res.json({ items });
-    });
+  ipc.get('/api/quality/queue', (_req, res) => {
+    const items = orchestrator.getQueueItems();
+    res.json({ items });
+  });
 
-    ipc.get('/api/quality/status', (_req, res) => {
-      const stats = orchestrator!.stats;
-      res.json({ stats, running: orchestrator!.isRunning, paused: orchestrator!.isPaused });
-    });
+  ipc.get('/api/quality/status', (_req, res) => {
+    const stats = orchestrator.stats;
+    res.json({ stats, running: orchestrator.isRunning, paused: orchestrator.isPaused });
+  });
 
-    ipc.post('/api/quality/start', (_req, res) => {
-      if (!orchestrator!.isRunning) orchestrator!.start();
-      res.json({ ok: true });
-    });
+  ipc.post('/api/quality/start', (_req, res) => {
+    if (!orchestrator.isRunning) orchestrator.start();
+    res.json({ ok: true });
+  });
 
-    ipc.post('/api/quality/stop', (_req, res) => {
-      orchestrator!.stop();
-      res.json({ ok: true });
-    });
+  ipc.post('/api/quality/stop', (_req, res) => {
+    orchestrator.stop();
+    res.json({ ok: true });
+  });
 
-    ipc.post('/api/quality/pause', (_req, res) => {
-      orchestrator!.pause();
-      res.json({ ok: true });
-    });
+  ipc.post('/api/quality/pause', (_req, res) => {
+    orchestrator.pause();
+    res.json({ ok: true });
+  });
 
-    ipc.post('/api/quality/resume', (_req, res) => {
-      orchestrator!.resume();
-      res.json({ ok: true });
-    });
+  ipc.post('/api/quality/resume', (_req, res) => {
+    orchestrator.resume();
+    res.json({ ok: true });
+  });
 
-    ipc.post('/api/quality/enqueue', async (_req, res) => {
-      const count = await orchestrator!.enqueueRepos();
-      res.json({ ok: true, enqueued: count });
-    });
+  ipc.post('/api/quality/enqueue', async (_req, res) => {
+    const count = await orchestrator.enqueueRepos();
+    res.json({ ok: true, enqueued: count });
+  });
 
-    ipc.post('/api/quality/reset', (_req, res) => {
-      const count = orchestrator!.resetFailed();
-      res.json({ ok: true, reset: count });
-    });
+  ipc.post('/api/quality/reset', (_req, res) => {
+    const count = orchestrator.resetFailed();
+    res.json({ ok: true, reset: count });
+  });
 
-    ipc.get('/api/quality/trends', (_req, res) => {
-      res.json(orchestrator!.getTrends());
-    });
+  ipc.get('/api/quality/trends', (_req, res) => {
+    res.json(orchestrator.getTrends());
+  });
 
-    ipc.get('/api/quality/attempts/:id', (req, res) => {
-      const id = parseInt(req.params['id']!, 10);
-      if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
-      res.json(orchestrator!.getAttempts(id));
-    });
+  ipc.get('/api/quality/attempts/:id', (req, res) => {
+    const id = parseInt(req.params['id']!, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
+    res.json(orchestrator.getAttempts(id));
+  });
 
-    ipc.get('/api/quality/config', (_req, res) => {
-      res.json(orchestrator!.getConfig());
-    });
+  ipc.get('/api/quality/config', (_req, res) => {
+    res.json(orchestrator.getConfig());
+  });
 
-    ipc.post('/api/quality/config', (req, res) => {
-      const { threshold, maxWorkers } = req.body as { threshold?: number; maxWorkers?: number };
-      if (threshold != null) orchestrator!.updateConfig({ threshold });
-      if (maxWorkers != null) orchestrator!.updateConfig({ maxWorkers });
-      res.json({ ok: true, config: orchestrator!.getConfig() });
-    });
-  }
+  ipc.post('/api/quality/config', (req, res) => {
+    const { threshold, maxWorkers } = req.body as { threshold?: number; maxWorkers?: number };
+    if (threshold != null) orchestrator.updateConfig({ threshold });
+    if (maxWorkers != null) orchestrator.updateConfig({ maxWorkers });
+    res.json({ ok: true, config: orchestrator.getConfig() });
+  });
+
+  // ── Manual execution endpoints ──────────────────────────────────────────
+
+  ipc.post('/api/quality/execute/:id', async (req, res) => {
+    const id = parseInt(req.params['id']!, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
+    const result = await orchestrator.executeItem(id);
+    res.json(result);
+  });
+
+  ipc.get('/api/quality/output/:workerId', (req, res) => {
+    const wid = req.params['workerId']!;
+    const output = orchestrator.getExecutionOutput(wid);
+    if (!output) { res.status(404).json({ error: 'execution not found' }); return; }
+    res.json(output);
+  });
+
+  ipc.post('/api/quality/cancel/:workerId', (req, res) => {
+    const wid = req.params['workerId']!;
+    const ok = orchestrator.cancelExecution(wid);
+    res.json({ ok });
+  });
+
+  ipc.post('/api/quality/queue/:id/delete', (req, res) => {
+    const id = parseInt(req.params['id']!, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
+    const ok = orchestrator.deleteQueueItem(id);
+    res.json({ ok });
+  });
+
+  ipc.get('/api/quality/cmd/:id', (req, res) => {
+    const id = parseInt(req.params['id']!, 10);
+    if (isNaN(id)) { res.status(400).json({ error: 'invalid id' }); return; }
+    const cmd = orchestrator.getCmdForItem(id);
+    if (!cmd) { res.status(404).json({ error: 'item not found' }); return; }
+    res.json(cmd);
+  });
 
   // Only register signal handlers once per process
   if (process._gateKeeperSignalsRegistered !== true) {
@@ -321,9 +415,9 @@ function ensurePidFile(): void {
 }
 
 function shutdown(cache: SqliteCache): void {
-  try {
-    fs.unlinkSync(PID_FILE);
-  } catch { }
+  try { fs.unlinkSync(PID_FILE); } catch { }
+  for (const p of watchedLcovPaths) fs.unwatchFile(p);
+  for (const t of lcovDebounceTimers.values()) clearTimeout(t);
   cache.close();
   process.exit(0);
 }

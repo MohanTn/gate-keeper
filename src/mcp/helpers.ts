@@ -11,6 +11,7 @@ import { spawnSync } from 'child_process';
 import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { StringAnalysisResult } from '../analyzer/string-analyzer';
 import { FileAnalysis } from '../types';
+import { fixText } from '../util/fix-text';
 
 // ── Configuration ──────────────────────────────────────────
 
@@ -119,7 +120,8 @@ export function formatAnalysisResult(analysis: FileAnalysis, minRating: number):
     for (const v of analysis.violations) {
       const loc = v.line ? ` (line ${v.line})` : '';
       lines.push(`- **${v.severity.toUpperCase()}** [${v.type}]${loc}: ${v.message}`);
-      if (v.fix) lines.push(`  → Fix: ${v.fix}`);
+      const t = fixText(v.fix);
+      if (t) lines.push(`  → Fix: ${t}`);
     }
   }
 
@@ -160,7 +162,8 @@ export function formatStringResult(result: StringAnalysisResult, minRating: numb
     for (const v of result.violations) {
       const loc = v.line ? ` (line ${v.line})` : '';
       lines.push(`- **${v.severity.toUpperCase()}** [${v.type}]${loc}: ${v.message}`);
-      if (v.fix) lines.push(`  → Fix: ${v.fix}`);
+      const t = fixText(v.fix);
+      if (t) lines.push(`  → Fix: ${t}`);
     }
   }
 

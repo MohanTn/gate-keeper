@@ -249,16 +249,15 @@ describe('FixWorker', () => {
 
   // ── tryOpenWSL ─────────────────────────────────────────────────────────────
 
-  it('tryOpenWSL succeeds via wt.exe when available', () => {
+  it('tryOpenWSL succeeds via cmd.exe when available (preferred for reliability)', () => {
     const worker = new FixWorker(opts);
     const cp = require('child_process') as typeof import('child_process');
-    (jest.spyOn(cp, 'execSync') as unknown as jest.Mock).mockImplementation(() => '');
     const fakeChild = { unref: jest.fn() } as unknown as ReturnType<typeof cp.spawn>;
     const spawnSpy = jest.spyOn(cp, 'spawn').mockReturnValue(fakeChild);
 
     const result = (worker as unknown as { tryOpenWSL: (s: string) => boolean }).tryOpenWSL('/tmp/x.sh');
     expect(result).toBe(true);
-    expect(spawnSpy).toHaveBeenCalledWith('wt.exe', expect.any(Array), expect.objectContaining({ detached: true }));
+    expect(spawnSpy).toHaveBeenCalledWith('cmd.exe', expect.any(Array), expect.objectContaining({ detached: true }));
   });
 
   it('tryOpenWSL falls back to cmd.exe when wt.exe is unavailable', () => {
@@ -284,7 +283,7 @@ describe('FixWorker', () => {
 
     const result = (worker as unknown as { tryOpenLinux: (s: string) => boolean }).tryOpenLinux('/tmp/x.sh');
     expect(result).toBe(true);
-    expect(spawnSpy).toHaveBeenCalledWith('bash', ['/tmp/x.sh'], expect.objectContaining({ detached: true }));
+    expect(spawnSpy).toHaveBeenCalledWith('bash', ['-i', '/tmp/x.sh'], expect.objectContaining({ detached: true }));
   });
 
   // ── resolveClaudePath ──────────────────────────────────────────────────────

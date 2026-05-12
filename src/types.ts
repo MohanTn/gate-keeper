@@ -37,12 +37,26 @@ export interface Metrics {
   coveragePercent?: number;
 }
 
+export {
+  Span,
+  Fix,
+  RatingBreakdownItem,
+  AgentResponseEnvelope,
+  RemediationStep,
+  RemediationPlan,
+} from './types/agent';
+import { Span, Fix, RatingBreakdownItem } from './types/agent';
+
 export interface Violation {
   type: string;
   severity: 'error' | 'warning' | 'info';
   message: string;
   line?: number;
-  fix?: string;
+  fix?: Fix | string;
+  ruleId?: string;
+  span?: Span;
+  codeSnippet?: string;
+  priorityScore?: number;
 }
 
 export interface FileAnalysis {
@@ -56,6 +70,9 @@ export interface FileAnalysis {
   repoRoot?: string;
   definedTypes?: string[];
   layer?: string;
+  ratingBreakdown?: RatingBreakdownItem[];
+  fileHash?: string;
+  analyzerVersion?: string;
 }
 
 export interface GraphNode {

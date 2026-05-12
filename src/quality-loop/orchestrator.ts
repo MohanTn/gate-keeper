@@ -1,5 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { spawn, execSync, ChildProcess } from 'child_process';
 import { SqliteCache } from '../cache/sqlite-cache';
 import { QueueManager } from './queue-manager';
 import { FileLockManager } from './file-lock';
@@ -7,6 +9,22 @@ import { FixWorker } from './fix-worker';
 import { QualityLoopConfig, WorkerResult, WSMessage } from '../types';
 
 const QUALITY_CONFIG_PATH = path.join(process.env.HOME ?? '/tmp', '.gate-keeper', 'quality-config.json');
+
+/** A manual execution triggered from the dashboard — opens a real terminal window */
+interface ManualExecution {
+  workerId: string;
+  queueId: number;
+  filePath: string;
+  repo: string;
+  outputFile: string;
+  statusFile: string;
+  scriptFile: string;
+  promptFile: string;
+  startTime: number;
+  running: boolean;
+  exitCode: number | null;
+  pollTimer?: NodeJS.Timeout;
+}
 
 interface OrchestratorCallbacks {
   broadcast: (msg: WSMessage, repoFilter?: string) => void;
@@ -20,6 +38,7 @@ export class QualityOrchestrator {
   private locks: FileLockManager;
   private callbacks: OrchestratorCallbacks;
 
+  /** Tracks auto-scheduled workers (orchestrator-driven) */
   private activeWorkers = new Map<string, {
     queueId: number;
     filePath: string;
@@ -27,6 +46,10 @@ export class QualityOrchestrator {
     startTime: number;
     timeout: NodeJS.Timeout;
   }>();
+
+  /** Tracks manual executions triggered from the dashboard */
+  private manualExecutions = new Map<string, ManualExecution>();
+
   private paused = false;
   private stopped = false;
   private checkpointTimer: NodeJS.Timeout | null = null;
@@ -102,7 +125,17 @@ export class QualityOrchestrator {
   }
 
   getTrends() {
-    return this.cache.quality.getTrends();
+    const rows = this.cache.quality.getTrends();
+    return rows.map(r => ({
+      id: r.id,
+      repo: r.repo,
+      overallRating: r.overall_rating,
+      filesTotal: r.files_total,
+      filesPassed: r.files_passed,
+      filesFailed: r.files_failed,
+      filesPending: r.files_pending,
+      recordedAt: r.recorded_at,
+    }));
   }
 
   updateConfig(partial: Partial<QualityLoopConfig>): void {
@@ -122,6 +155,413 @@ export class QualityOrchestrator {
 
   getConfig(): QualityLoopConfig {
     return { ...this.config };
+  }
+
+  // ── Manual execution (dashboard-triggered) ──────────────────────────────────
+
+  /**
+   * Look up repo metadata to determine session type.
+   * Returns 'claude', 'github-copilot', or 'unknown'.
+   */
+  getRepoSessionType(repo: string): string {
+    try {
+      const meta = this.cache.getRepositoryByPath(repo);
+      return meta?.sessionType ?? 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Generate a human-readable command string for a queue item.
+   */
+  getCmdForItem(itemId: number): { cmd: string; sessionType: string } | null {
+    const item = this.queue.getItem(itemId);
+    if (!item) return null;
+    const sessionType = this.getRepoSessionType(item.repo);
+    const shortFile = path.basename(item.filePath);
+    if (sessionType === 'github-copilot') {
+      return { cmd: `gh copilot suggest "fix violations in ${shortFile}"`, sessionType };
+    }
+    return {
+      cmd: `claude --dangerously-skip-permissions "fix all violations in @${shortFile}"`,
+      sessionType,
+    };
+  }
+
+  /**
+   * Execute a single queue item manually from the dashboard.
+   * Opens a real terminal window and polls a status file for completion.
+   */
+  async executeItem(itemId: number): Promise<{ ok: boolean; workerId: string | null; error?: string }> {
+    const item = this.queue.getItem(itemId);
+    if (!item) return { ok: false, workerId: null, error: 'Queue item not found' };
+    if (item.status === 'in_progress') return { ok: false, workerId: null, error: 'Item already in progress' };
+
+    // Mark as in_progress
+    const workerId = `manual-${itemId}-${Date.now()}`;
+    this.queue.markInProgress(itemId, workerId);
+    this.broadcastItem(itemId);
+
+    // Generate the fix prompt
+    const prompt = await this.generateFixPrompt(item.filePath, item.repo);
+    if (!prompt) {
+      this.queue.markFailed(itemId, 'Could not generate fix prompt');
+      this.broadcastItem(itemId);
+      return { ok: false, workerId: null, error: 'Could not fetch analysis for file' };
+    }
+
+    const sessionType = this.getRepoSessionType(item.repo);
+    const claudePath = this.resolveClaudePath();
+
+    // Write prompt + bash script to temp files
+    const id = `gk-manual-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const tmp = os.tmpdir();
+    const promptFile = path.join(tmp, `${id}.prompt`);
+    const statusFile = path.join(tmp, `${id}.status`);
+    const logFile = path.join(tmp, `${id}.log`);
+    const scriptFile = path.join(tmp, `${id}.sh`);
+    try {
+      fs.writeFileSync(promptFile, prompt, 'utf8');
+      this.writeTerminalScript(scriptFile, { promptFile, statusFile, logFile, claudePath, repo: item.repo, sessionType });
+    } catch (err) {
+      this.queue.markFailed(itemId, 'Could not write script files');
+      this.broadcastItem(itemId);
+      return { ok: false, workerId: null, error: 'Could not write script files' };
+    }
+
+    this.log(`Manual execute: ${claudePath} for ${path.basename(item.filePath)} (${sessionType})`);
+
+    // Open a real terminal window
+    const opened = this.openTerminal(scriptFile);
+    if (!opened) {
+      this.queue.markFailed(itemId, 'Could not open terminal');
+      this.broadcastItem(itemId);
+      this.cleanupFiles(promptFile, statusFile, logFile, scriptFile);
+      return { ok: false, workerId: null, error: 'Could not open terminal' };
+    }
+
+    const execution: ManualExecution = {
+      workerId,
+      queueId: itemId,
+      filePath: item.filePath,
+      repo: item.repo,
+      outputFile: logFile,
+      statusFile,
+      scriptFile,
+      promptFile,
+      startTime: Date.now(),
+      running: true,
+      exitCode: null,
+    };
+
+    this.manualExecutions.set(workerId, execution);
+
+    // Poll for completion in the background
+    this.pollManualCompletion(workerId);
+
+    return { ok: true, workerId };
+  }
+
+  /**
+   * Cancel a running manual execution by writing an abort marker to the status file.
+   * The polling loop detects it and cleans up.
+   */
+  cancelExecution(workerId: string): boolean {
+    const exec = this.manualExecutions.get(workerId);
+    if (!exec || !exec.running) return false;
+    exec.running = false;
+    exec.exitCode = -1;
+    if (exec.pollTimer) clearInterval(exec.pollTimer);
+    // Write cancelled marker so polling loop won't treat it as a real exit
+    try {
+      fs.writeFileSync(exec.statusFile, JSON.stringify({ exitCode: -1, timestamp: Math.floor(Date.now() / 1000) }), 'utf8');
+    } catch { /* ignore */ }
+    this.queue.markFailed(exec.queueId, 'Cancelled by user');
+    this.broadcastItem(exec.queueId);
+    this.cleanupFiles(exec.outputFile, exec.statusFile, exec.scriptFile, exec.promptFile);
+    this.manualExecutions.delete(workerId);
+    this.log(`Manual execution cancelled: ${workerId}`);
+    return true;
+  }
+
+  /**
+   * Delete a queue item (remove from database).
+   */
+  deleteQueueItem(itemId: number): boolean {
+    for (const [wid, exec] of this.manualExecutions) {
+      if (exec.queueId === itemId && exec.running) {
+        exec.running = false;
+        exec.exitCode = -1;
+        if (exec.pollTimer) clearInterval(exec.pollTimer);
+        try {
+          fs.writeFileSync(exec.statusFile, JSON.stringify({ exitCode: -1, timestamp: Math.floor(Date.now() / 1000) }), 'utf8');
+        } catch { /* ignore */ }
+        this.manualExecutions.delete(wid);
+      }
+    }
+    try {
+      this.cache.quality.updateQueueItem(itemId, { status: 'skipped' });
+      this.broadcast({ type: 'queue_update' as const, queueItem: this.queue.getItem(itemId) ?? undefined });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Get the current output of a running manual execution.
+   */
+  getExecutionOutput(workerId: string): { output: string; running: boolean; exitCode: number | null; startTime: number } | null {
+    const exec = this.manualExecutions.get(workerId);
+    if (!exec) return null;
+    return {
+      output: this.readOutputFile(exec.outputFile),
+      running: exec.running,
+      exitCode: exec.exitCode,
+      startTime: exec.startTime,
+    };
+  }
+
+  // ── Manual execution helpers ─────────────────────────────────────────────────
+
+  private async generateFixPrompt(filePath: string, repo: string): Promise<string | null> {
+    try {
+      const url = `http://127.0.0.1:5378/api/file-detail?file=${encodeURIComponent(filePath)}&repo=${encodeURIComponent(repo)}`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json() as { analysis?: { rating: number; violations: Array<{ severity: string; line?: number; message: string; fix?: string }> } };
+      if (!data.analysis) return null;
+
+      const { rating, violations } = data.analysis;
+      const numbered = violations.map((v, i) => {
+        const fixStr = typeof v.fix === 'string' ? v.fix : '';
+        return `${i + 1}. [${v.severity.toUpperCase()}]${v.line ? ` (line ${v.line})` : ''}: ${v.message}${fixStr ? `\n   Fix: ${fixStr}` : ''}`;
+      }).join('\n');
+
+      return `fix all violations in @${filePath}\nFile: ${filePath}\nRating: ${rating}/10\nViolations: ${violations.length}\n\n${numbered}`;
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveClaudePath(): string {
+    const candidates = [
+      'claude',
+      '/home/mohantn/.local/bin/claude',
+      '/usr/local/bin/claude',
+      `${os.homedir()}/.npm-global/bin/claude`,
+      `${os.homedir()}/.npm-packages/bin/claude`,
+    ];
+    for (const c of candidates) {
+      try { if (fs.existsSync(c)) return c; } catch { /* ignore */ }
+    }
+    try {
+      const resolved = execSync('which claude 2>/dev/null', { encoding: 'utf8', timeout: 2000 }).trim();
+      if (resolved) return resolved;
+    } catch { /* ignore */ }
+    return 'claude';
+  }
+
+  private async reanalyzeFile(filePath: string, repo: string): Promise<{ rating: number; violations: Array<unknown> } | null> {
+    try {
+      const res = await fetch(`http://127.0.0.1:5379/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath, repoRoot: repo }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json() as { analysis?: { rating: number; violations: Array<unknown> } };
+      return data.analysis ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private readOutputFile(filePath: string): string {
+    try {
+      return fs.readFileSync(filePath, 'utf8');
+    } catch {
+      return '';
+    }
+  }
+
+  private cleanupFiles(...files: string[]): void {
+    for (const f of files) {
+      try { fs.unlinkSync(f); } catch { /* ignore */ }
+    }
+  }
+
+  // ── Terminal helpers (reuse the same pattern as FixWorker) ────────────────────
+
+  /** Write the bash script that will run inside the terminal window. */
+  private writeTerminalScript(
+    scriptPath: string,
+    opts: { promptFile: string; statusFile: string; logFile: string; claudePath: string; repo: string; sessionType: string },
+  ): void {
+    const cmd = opts.sessionType === 'github-copilot'
+      ? `gh copilot suggest "fix violations in $(cat '${opts.promptFile}')"`
+      : `"${opts.claudePath}" --dangerously-skip-permissions "$(cat '${opts.promptFile}')"`;
+
+    fs.writeFileSync(scriptPath, `#!/usr/bin/env bash
+# Note: this script is invoked via "bash -i" so ~/.bashrc is sourced automatically.
+set -uo pipefail
+
+STATUS_FILE='${opts.statusFile}'
+LOG_FILE='${opts.logFile}'
+REPO='${opts.repo}'
+
+EXIT_CODE=0
+
+on_exit() {
+  local last=$?
+  [ "$last" -ne 0 ] && [ "$EXIT_CODE" -eq 0 ] && EXIT_CODE=$last
+  printf '{"exitCode":%d,"timestamp":%d}' "$EXIT_CODE" "$(date +%s)" > "$STATUS_FILE" 2>/dev/null || true
+}
+trap on_exit EXIT
+
+cd "$REPO"
+
+${cmd} 2>&1 | tee "$LOG_FILE" || EXIT_CODE=$?
+
+echo ""
+echo "────────────────────────────────────────────"
+if [ "$EXIT_CODE" -eq 0 ]; then
+  echo "  Claude fix finished — press Enter to close"
+else
+  echo "  Claude exited with code $EXIT_CODE — press Enter to close"
+fi
+echo "────────────────────────────────────────────"
+read -r || true
+`, 'utf8');
+
+    fs.chmodSync(scriptPath, 0o755);
+  }
+
+  /** Open a real terminal window running the given script. */
+  private openTerminal(scriptPath: string): boolean {
+    if (this.isWSL()) {
+      // Strategy 1: cmd.exe /c start — opens a new CMD window (most reliable on WSL)
+      // Use cmd /k to keep the window open after the script exits
+      try {
+        spawn('cmd.exe', ['/c', 'start', '', 'cmd', '/k', 'wsl.exe', 'bash', '-i', scriptPath], { detached: true, stdio: 'ignore' }).unref();
+        return true;
+      } catch { /* try next */ }
+
+      // Strategy 2: Windows Terminal (wt.exe)
+      try {
+        execSync('command -v wt.exe 2>/dev/null', { timeout: 1000 });
+        spawn('wt.exe', ['-w', '0', 'nt', '--', 'wsl.exe', 'bash', '-i', scriptPath], { detached: true, stdio: 'ignore' }).unref();
+        return true;
+      } catch { /* try next */ }
+
+      // Strategy 3: powershell Start-Process
+      try {
+        spawn('powershell.exe', ['-NoProfile', '-Command',
+          `Start-Process cmd -ArgumentList '/k wsl.exe bash -i \\"${scriptPath}\\"'`],
+        { detached: true, stdio: 'ignore' }).unref();
+        return true;
+      } catch { return false; }
+    }
+
+    const terminals: Array<[string, string[]]> = [
+      ['gnome-terminal', ['--', 'bash', scriptPath]],
+      ['konsole',        ['--hold', '-e', 'bash', scriptPath]],
+      ['xterm',          ['-e', `bash "${scriptPath}"`]],
+      ['x-terminal-emulator', ['-e', `bash "${scriptPath}"`]],
+    ];
+
+    for (const [bin, args] of terminals) {
+      try {
+        execSync(`command -v ${bin} 2>/dev/null`, { timeout: 1000 });
+        spawn(bin, args, { detached: true, stdio: 'ignore' }).unref();
+        return true;
+      } catch { /* not found */ }
+    }
+
+    return false;
+  }
+
+  private isWSL(): boolean {
+    if (process.env['WSL_DISTRO_NAME']) return true;
+    try {
+      const v = fs.readFileSync('/proc/version', 'utf8').toLowerCase();
+      return v.includes('microsoft') || v.includes('wsl');
+    } catch {
+      return false;
+    }
+  }
+
+  /** Poll the status file every 3 seconds until the terminal script writes a result. */
+  private pollManualCompletion(workerId: string): void {
+    const exec = this.manualExecutions.get(workerId);
+    if (!exec) return;
+
+    const startTime = Date.now();
+    const POLL_MS = 3000;
+    const MAX_WAIT = 600_000; // 10 minutes for manual execution
+
+    const poll = async () => {
+      const e = this.manualExecutions.get(workerId);
+      if (!e || !e.running) return;
+
+      // Timeout check
+      if (Date.now() - startTime > MAX_WAIT) {
+        e.running = false;
+        e.exitCode = null;
+        this.queue.markFailed(e.queueId, 'Manual execution timed out');
+        this.broadcastItem(e.queueId);
+        this.cleanupFiles(e.outputFile, e.statusFile, e.scriptFile, e.promptFile);
+        this.manualExecutions.delete(workerId);
+        return;
+      }
+
+      // Check status file
+      let status: { exitCode: number; timestamp: number } | null = null;
+      try {
+        if (fs.existsSync(e.statusFile)) {
+          status = JSON.parse(fs.readFileSync(e.statusFile, 'utf8'));
+        }
+      } catch { /* not written yet */ }
+
+      if (status !== null) {
+        clearInterval(e.pollTimer);
+        e.running = false;
+        e.exitCode = status.exitCode;
+
+        const fullOutput = this.readOutputFile(e.outputFile);
+        const analysis = await this.reanalyzeFile(e.filePath, e.repo);
+        const newRating = analysis?.rating ?? 0;
+        const violationsRemaining = analysis?.violations.length ?? 0;
+
+        this.cache.quality.logAttempt({
+          queueId: e.queueId,
+          attempt: 1, // approximate
+          ratingBefore: 0,
+          ratingAfter: newRating,
+          violationsFixed: 0,
+          violationsRemaining,
+          fixSummary: status.exitCode === 0 ? `Manual fix completed (exit ${status.exitCode})` : `Manual fix failed (exit ${status.exitCode})`,
+          errorMessage: status.exitCode !== 0 ? `Process exited with code ${status.exitCode}` : undefined,
+          durationMs: Date.now() - e.startTime,
+          workerOutput: fullOutput,
+        });
+
+        if (status.exitCode === 0 && newRating >= this.config.threshold) {
+          this.queue.markCompleted(e.queueId, newRating);
+        } else if (status.exitCode !== 0) {
+          this.queue.markFailed(e.queueId, `Manual fix exited with code ${status.exitCode}`);
+        } else {
+          this.queue.markFailed(e.queueId, `Rating ${newRating} below threshold ${this.config.threshold}`);
+        }
+
+        this.broadcastItem(e.queueId);
+        this.cleanupFiles(e.outputFile, e.statusFile, e.scriptFile, e.promptFile);
+        this.manualExecutions.delete(workerId);
+      }
+    };
+
+    exec.pollTimer = setInterval(poll, POLL_MS);
   }
 
   private async run(): Promise<void> {

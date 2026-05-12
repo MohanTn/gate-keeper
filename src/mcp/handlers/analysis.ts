@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { UniversalAnalyzer } from '../../analyzer/universal-analyzer';
 import { StringAnalyzer } from '../../analyzer/string-analyzer';
+import { topoSort } from '../../graph/dependency-graph';
 import { FileAnalysis } from '../../types';
 import {
   fetchDaemonApi,
@@ -11,7 +12,7 @@ import {
   formatStringResult,
   getMinRating,
 } from '../helpers';
-import { text } from './shared';
+import { text, envelope, McpResponse } from './shared';
 
 // ── Shared instances ───────────────────────────────────────
 
@@ -20,7 +21,7 @@ const stringAnalyzer = new StringAnalyzer();
 
 // ── Handlers ───────────────────────────────────────────────
 
-export async function handleAnalyzeFile(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleAnalyzeFile(args: Record<string, unknown>): Promise<McpResponse> {
   const filePath = String(args.file_path ?? '');
   if (!filePath) return text('Error: file_path is required.');
   if (!fs.existsSync(filePath)) return text(`Error: File not found: ${filePath}`);
@@ -32,10 +33,10 @@ export async function handleAnalyzeFile(args: Record<string, unknown>): Promise<
   if (!analysis) return text('Error: Analysis returned no results.');
 
   const minRating = getMinRating();
-  return text(formatAnalysisResult(analysis, minRating));
+  return envelope('analyze_file', analysis, formatAnalysisResult(analysis, minRating));
 }
 
-export async function handleAnalyzeCode(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleAnalyzeCode(args: Record<string, unknown>): Promise<McpResponse> {
   const code = String(args.code ?? '');
   const language = String(args.language ?? '');
   if (!code) return text('Error: code is required.');
@@ -45,10 +46,58 @@ export async function handleAnalyzeCode(args: Record<string, unknown>): Promise<
 
   const result = stringAnalyzer.analyze(code, language as 'typescript' | 'tsx' | 'jsx' | 'csharp');
   const minRating = getMinRating();
-  return text(formatStringResult(result, minRating));
+  return envelope('analyze_code', result, formatStringResult(result, minRating));
 }
 
-export async function handleCodebaseHealth(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleAnalyzeMany(args: Record<string, unknown>): Promise<McpResponse> {
+  const rawPaths = Array.isArray(args.file_paths) ? args.file_paths : null;
+  if (!rawPaths || rawPaths.length === 0) {
+    return text('Error: file_paths is required and must be a non-empty array.');
+  }
+  const filePaths = rawPaths.map(p => String(p));
+  const maxParallel = Math.max(1, Math.min(16, Number(args.max_parallel) || 4));
+
+  const analyses: FileAnalysis[] = [];
+  for (let i = 0; i < filePaths.length; i += maxParallel) {
+    const chunk = filePaths.slice(i, i + maxParallel);
+    const results = await Promise.all(
+      chunk.map(async fp => {
+        if (!fs.existsSync(fp) || !fileAnalyzer.isSupportedFile(fp)) return null;
+        return fileAnalyzer.analyze(fp);
+      }),
+    );
+    for (const r of results) {
+      if (r) analyses.push(r);
+    }
+  }
+
+  const ratingByNode = new Map<string, number>();
+  for (const a of analyses) ratingByNode.set(a.path, a.rating);
+  const knownPaths = new Set(analyses.map(a => a.path));
+  const edges: Array<{ source: string; target: string }> = [];
+  for (const a of analyses) {
+    for (const d of a.dependencies) {
+      if (knownPaths.has(d.target)) {
+        edges.push({ source: a.path, target: d.target });
+      }
+    }
+  }
+  const fixOrder = topoSort([...knownPaths], edges, ratingByNode);
+
+  const passCount = analyses.filter(a => a.rating >= getMinRating()).length;
+  const markdown = [
+    `## Batch Analysis (${analyses.length} files)`,
+    `**Passing:** ${passCount}/${analyses.length}`,
+    '',
+    '### Fix Order (leaves first)',
+    ...fixOrder.slice(0, 20).map((p, i) => `${i + 1}. ${path.basename(p)}`),
+    fixOrder.length > 20 ? `... and ${fixOrder.length - 20} more` : '',
+  ].filter(Boolean).join('\n');
+
+  return envelope('analyze_many', { analyses, fixOrder }, markdown);
+}
+
+export async function handleCodebaseHealth(args: Record<string, unknown>): Promise<McpResponse> {
   const maxFiles = Number(args.max_files) || 200;
   const dir = String(args.directory || findGitRoot(process.cwd()));
 
@@ -111,10 +160,30 @@ export async function handleCodebaseHealth(args: Record<string, unknown>): Promi
     }
   }
 
-  return text(lines.join('\n'));
+  const ratingByNode = new Map<string, number>();
+  for (const a of analyses) ratingByNode.set(a.path, a.rating);
+  const knownPaths = new Set(analyses.map(a => a.path));
+  const edges: Array<{ source: string; target: string }> = [];
+  for (const a of analyses) {
+    for (const d of a.dependencies) {
+      if (knownPaths.has(d.target)) edges.push({ source: a.path, target: d.target });
+    }
+  }
+  const fixOrder = topoSort([...knownPaths], edges, ratingByNode);
+
+  const data = {
+    avgRating,
+    fileCount: analyses.length,
+    distribution: { excellent, good, poor },
+    worstFiles: sorted.slice(0, 10).filter(a => a.rating < minRating),
+    topViolationTypes: topViolations.map(([type, count]) => ({ type, count })),
+    fixOrder,
+  };
+
+  return envelope('get_codebase_health', data, lines.join('\n'));
 }
 
-export async function handleQualityRules(): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleQualityRules(): Promise<McpResponse> {
   const minRating = getMinRating();
   const rules = [
     '## Gate Keeper Quality Rules',
@@ -168,5 +237,22 @@ export async function handleQualityRules(): Promise<{ content: Array<{ type: str
     '9. Aim for 80%+ test coverage on all source files.',
   ];
 
-  return text(rules.join('\n'));
+  const rulesData = [
+    { ruleId: 'ts/no-any', severity: 'warning', deduction: 0.5, description: 'Do not use `any`. Use specific types or `unknown`.', fixable: true },
+    { ruleId: 'ts/no-console', severity: 'info', deduction: 0.1, description: 'Remove console.log from production code.', fixable: true },
+    { ruleId: 'react/hook-count', severity: 'warning', deduction: 0.5, description: 'React components should not have >7 hooks.', fixable: false },
+    { ruleId: 'react/no-duplicate-hooks', severity: 'warning', deduction: 0.5, description: 'Do not call the same hook multiple times.', fixable: false },
+    { ruleId: 'react/jsx-key', severity: 'error', deduction: 1.5, description: 'Always add `key` prop in `.map()` JSX.', fixable: false },
+    { ruleId: 'react/no-inline-handler', severity: 'warning', deduction: 0.5, description: 'Extract inline JSX event handlers to named functions.', fixable: false },
+    { ruleId: 'ts/no-todo', severity: 'warning', deduction: 0.5, description: 'Resolve TODO/FIXME/PLACEHOLDER markers before merging.', fixable: false },
+    { ruleId: 'ts/tech-debt', severity: 'info', deduction: 0.1, description: 'HACK/WORKAROUND markers — track in your issue tracker.', fixable: false },
+    { ruleId: 'ts/no-stub', severity: 'error', deduction: 1.5, description: 'Unimplemented stubs will throw at runtime.', fixable: false },
+    { ruleId: 'cs/god-class', severity: 'warning', deduction: 0.5, description: 'Classes with >20 methods should be split.', fixable: false },
+    { ruleId: 'cs/long-method', severity: 'warning', deduction: 0.5, description: 'Methods longer than 50 lines should be refactored.', fixable: false },
+    { ruleId: 'cs/tight-coupling', severity: 'warning', deduction: 0.5, description: 'Constructors with >5 parameters need a parameter object.', fixable: false },
+    { ruleId: 'cs/magic-number', severity: 'info', deduction: 0.1, description: 'Extract magic numbers to named constants.', fixable: false },
+    { ruleId: 'cs/empty-catch', severity: 'error', deduction: 1.5, description: 'Never swallow exceptions with empty catch blocks.', fixable: false },
+  ];
+
+  return envelope('get_quality_rules', { minRating, rules: rulesData }, rules.join('\n'));
 }

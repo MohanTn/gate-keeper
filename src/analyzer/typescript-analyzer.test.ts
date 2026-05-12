@@ -667,4 +667,87 @@ describe('TypeScriptAnalyzer', () => {
       expect(Array.isArray(result.violations)).toBe(true);
     });
   });
+
+  describe('violation spans and ruleIds', () => {
+    it('emits a well-formed span and ruleId for any_type', () => {
+      const tsFile = path.join(tempDir, 'span-any.ts');
+      fs.writeFileSync(tsFile, `const x: any = 1;\n`);
+
+      const result = analyzer.analyze(tsFile);
+      const v = result.violations.find(x => x.type === 'any_type');
+
+      expect(v).toBeDefined();
+      expect(v?.ruleId).toBe('ts/no-any');
+      expect(v?.span).toBeDefined();
+      expect(v?.span?.line).toBe(1);
+      expect(v?.span?.endLine).toBe(1);
+      expect(v?.span?.column).toBeGreaterThan(0);
+      expect(v?.span?.endColumn).toBeGreaterThan(v!.span!.column);
+      // span covers the literal text "any" (3 chars)
+      expect(v?.span?.length).toBe(3);
+    });
+
+    it('emits a span on the property access for console_log', () => {
+      const tsFile = path.join(tempDir, 'span-console.ts');
+      fs.writeFileSync(tsFile, `console.log("hi");\n`);
+
+      const result = analyzer.analyze(tsFile);
+      const v = result.violations.find(x => x.type === 'console_log');
+
+      expect(v).toBeDefined();
+      expect(v?.ruleId).toBe('ts/no-console');
+      expect(v?.span).toBeDefined();
+      expect(v?.span?.line).toBe(1);
+      // "console.log" is 11 chars
+      expect(v?.span?.length).toBe(11);
+    });
+
+    it('emits a deterministic Fix for any_type with replacement "unknown"', () => {
+      const tsFile = path.join(tempDir, 'fix-any.ts');
+      fs.writeFileSync(tsFile, `const x: any = 1;\n`);
+
+      const result = analyzer.analyze(tsFile);
+      const v = result.violations.find(x => x.type === 'any_type');
+      const f = v?.fix;
+
+      expect(f).toBeDefined();
+      expect(typeof f).toBe('object');
+      if (f && typeof f === 'object') {
+        expect(f.confidence).toBe('deterministic');
+        expect(f.replacement).toBe('unknown');
+        expect(f.replaceSpan?.length).toBe(3);
+        expect(f.replaceSpan?.line).toBe(1);
+      }
+    });
+
+    it('emits a deterministic Fix for console_log with replacement "logger.debug"', () => {
+      const tsFile = path.join(tempDir, 'fix-console.ts');
+      fs.writeFileSync(tsFile, `console.log("x");\n`);
+
+      const result = analyzer.analyze(tsFile);
+      const v = result.violations.find(x => x.type === 'console_log');
+      const f = v?.fix;
+
+      expect(f).toBeDefined();
+      expect(typeof f).toBe('object');
+      if (f && typeof f === 'object') {
+        expect(f.confidence).toBe('deterministic');
+        expect(f.replacement).toBe('logger.debug');
+        expect(f.replaceSpan?.length).toBe(11);
+      }
+    });
+
+    it('emits a span for TODO placeholder violations', () => {
+      const tsFile = path.join(tempDir, 'span-todo.ts');
+      fs.writeFileSync(tsFile, `// TODO: implement me\nexport const x = 1;\n`);
+
+      const result = analyzer.analyze(tsFile);
+      const v = result.violations.find(x => x.type === 'todo_placeholder');
+
+      expect(v).toBeDefined();
+      expect(v?.ruleId).toBe('ts/no-todo');
+      expect(v?.span?.line).toBe(1);
+      expect(v?.span?.column).toBeGreaterThan(0);
+    });
+  });
 });

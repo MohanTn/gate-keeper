@@ -549,6 +549,61 @@ describe('CSharpAnalyzer', () => {
     });
   });
 
+  describe('violation spans and ruleIds (Phase 5)', () => {
+    it('god_class has a non-null line anchored at the class declaration', () => {
+      const csFile = path.join(tempDir, 'god.cs');
+      const methodLines = Array.from({ length: 22 }, (_, i) =>
+        `  public void M${i}() { }`
+      ).join('\n');
+      fs.writeFileSync(csFile, `public class God {\n${methodLines}\n}\n`);
+
+      internals(analyzer).dotnetAvailable = false;
+      const result = analyzer.analyze(csFile);
+      const v = result.violations.find(x => x.type === 'god_class');
+
+      expect(v).toBeDefined();
+      expect(v?.ruleId).toBe('cs/god-class');
+      expect(v?.line).toBeGreaterThanOrEqual(1);
+      expect(v?.span).toBeDefined();
+      expect(v?.span?.column).toBeGreaterThan(0);
+    });
+
+    it('empty_catch span and ruleId are populated', () => {
+      const csFile = path.join(tempDir, 'empty-catch.cs');
+      fs.writeFileSync(
+        csFile,
+        `public class X {\n  public void Run() {\n    try { } catch (Exception e) { }\n  }\n}\n`
+      );
+
+      internals(analyzer).dotnetAvailable = false;
+      const result = analyzer.analyze(csFile);
+      const v = result.violations.find(x => x.type === 'empty_catch');
+
+      expect(v).toBeDefined();
+      expect(v?.ruleId).toBe('cs/empty-catch');
+      expect(v?.span?.line).toBe(3);
+      expect(v?.span?.column).toBeGreaterThan(0);
+    });
+
+    it('long_method span covers method start through closing brace', () => {
+      const csFile = path.join(tempDir, 'long.cs');
+      const body = Array.from({ length: 60 }, () => '    int x = 1;').join('\n');
+      fs.writeFileSync(
+        csFile,
+        `public class L {\n  public void Big()\n  {\n${body}\n  }\n}\n`
+      );
+
+      internals(analyzer).dotnetAvailable = false;
+      const result = analyzer.analyze(csFile);
+      const v = result.violations.find(x => x.type === 'long_method');
+
+      expect(v).toBeDefined();
+      expect(v?.ruleId).toBe('cs/long-method');
+      expect(v?.span).toBeDefined();
+      expect(v?.span?.endLine).toBeGreaterThan(v!.span!.line);
+    });
+  });
+
   describe('analyze method selection', () => {
     it('should use text analysis when dotnet is not available', () => {
       internals(analyzer).dotnetAvailable = false;

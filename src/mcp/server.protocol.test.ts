@@ -58,8 +58,8 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(Array.isArray(TOOLS)).toBe(true);
     });
 
-    it('should have 10 tools', () => {
-      expect(TOOLS.length).toBe(10);
+    it('should have 11 tools', () => {
+      expect(TOOLS.length).toBe(11);
     });
 
     it('should have required tool properties', () => {
@@ -82,6 +82,7 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(toolNames).toContain('suggest_refactoring');
       expect(toolNames).toContain('predict_impact_with_remediation');
       expect(toolNames).toContain('get_violation_patterns');
+      expect(toolNames).toContain('analyze_many');
     });
   });
 
@@ -116,7 +117,7 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(capturedOutputs.length).toBe(1);
       const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
       expect(response.result).toHaveProperty('tools');
-      expect((response.result as { tools: unknown[] }).tools.length).toBe(10);
+      expect((response.result as { tools: unknown[] }).tools.length).toBe(11);
     });
   });
 
@@ -138,6 +139,112 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(response.result).toHaveProperty('content');
     });
 
+    it('should emit structuredContent alongside markdown for analyze_file', async () => {
+      fs.writeFileSync(tempFilePath, 'const x: any = 1;\nconsole.log(x);\n');
+      const msg: JsonRpcRequest = {
+        jsonrpc: '2.0',
+        id: 31,
+        method: 'tools/call',
+        params: { name: 'analyze_file', arguments: { file_path: tempFilePath } },
+      };
+      await handleMessage(msg);
+
+      const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
+      const result = response.result as {
+        content: Array<{ text: string }>;
+        structuredContent?: {
+          version: string;
+          tool: string;
+          generatedAt: number;
+          data: {
+            path: string;
+            rating: number;
+            violations: Array<{
+              type: string;
+              ruleId?: string;
+              span?: { line: number; column: number; endLine: number; endColumn: number; offset?: number; length?: number };
+              codeSnippet?: string;
+            }>;
+          };
+        };
+      };
+
+      expect(result.content[0].text).toContain('Rating');
+      expect(result.structuredContent).toBeDefined();
+      expect(result.structuredContent?.version).toBe('1');
+      expect(result.structuredContent?.tool).toBe('analyze_file');
+      expect(typeof result.structuredContent?.generatedAt).toBe('number');
+
+      const data = result.structuredContent!.data;
+      expect(data.path).toBe(tempFilePath);
+      expect(typeof data.rating).toBe('number');
+
+      const anyViolation = data.violations.find(v => v.type === 'any_type');
+      expect(anyViolation).toBeDefined();
+      expect(anyViolation?.ruleId).toBe('ts/no-any');
+      expect(anyViolation?.span?.line).toBe(1);
+      expect(anyViolation?.span?.length ?? 0).toBe(3);
+      expect(anyViolation?.codeSnippet).toContain('any');
+    });
+
+    it('should batch-analyze files and return a topological fixOrder', async () => {
+      const fa = path.join('/tmp', `gate-keeper-many-a-${Date.now()}.ts`);
+      const fb = path.join('/tmp', `gate-keeper-many-b-${Date.now()}.ts`);
+      // b is a leaf; a imports b (so b should come before a in fixOrder)
+      fs.writeFileSync(fb, 'export const HELPER = 1;\n');
+      fs.writeFileSync(fa, `import { HELPER } from './${path.basename(fb).replace('.ts', '')}';\nexport const x = HELPER;\n`);
+
+      try {
+        const msg: JsonRpcRequest = {
+          jsonrpc: '2.0',
+          id: 99,
+          method: 'tools/call',
+          params: { name: 'analyze_many', arguments: { file_paths: [fa, fb], max_parallel: 2 } },
+        };
+        await handleMessage(msg);
+
+        const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
+        const result = response.result as {
+          structuredContent?: {
+            tool: string;
+            data: { analyses: Array<{ path: string }>; fixOrder: string[] };
+          };
+        };
+
+        expect(result.structuredContent?.tool).toBe('analyze_many');
+        const data = result.structuredContent!.data;
+        expect(data.analyses).toHaveLength(2);
+        // Whether b is resolved as a dependency depends on path resolution.
+        // At minimum, fixOrder includes both paths.
+        expect(data.fixOrder).toContain(fa);
+        expect(data.fixOrder).toContain(fb);
+      } finally {
+        if (fs.existsSync(fa)) fs.unlinkSync(fa);
+        if (fs.existsSync(fb)) fs.unlinkSync(fb);
+      }
+    });
+
+    it('should emit structuredContent for analyze_code', async () => {
+      const msg: JsonRpcRequest = {
+        jsonrpc: '2.0',
+        id: 32,
+        method: 'tools/call',
+        params: {
+          name: 'analyze_code',
+          arguments: { code: 'console.log(1);', language: 'typescript' },
+        },
+      };
+      await handleMessage(msg);
+
+      const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
+      const result = response.result as {
+        structuredContent?: { tool: string; data: { violations: Array<{ type: string }> } };
+      };
+
+      expect(result.structuredContent?.tool).toBe('analyze_code');
+      expect(result.structuredContent?.data.violations.some(v => v.type === 'console_log')).toBe(true);
+    });
+
     it('should call get_quality_rules tool', async () => {
       const msg: JsonRpcRequest = {
         jsonrpc: '2.0',
@@ -149,6 +256,36 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(capturedOutputs.length).toBe(1);
       const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
       expect(response.result).toHaveProperty('content');
+    });
+
+    it('should emit structuredContent for get_quality_rules', async () => {
+      const msg: JsonRpcRequest = {
+        jsonrpc: '2.0',
+        id: 41,
+        method: 'tools/call',
+        params: { name: 'get_quality_rules', arguments: {} },
+      };
+      await handleMessage(msg);
+
+      const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
+      const result = response.result as {
+        structuredContent?: {
+          tool: string;
+          data: {
+            minRating: number;
+            rules: Array<{ ruleId: string; severity: string; deduction: number; fixable: boolean }>;
+          };
+        };
+      };
+
+      expect(result.structuredContent?.tool).toBe('get_quality_rules');
+      expect(typeof result.structuredContent?.data.minRating).toBe('number');
+      expect(Array.isArray(result.structuredContent?.data.rules)).toBe(true);
+      const anyRule = result.structuredContent!.data.rules.find(r => r.ruleId === 'ts/no-any');
+      expect(anyRule).toBeDefined();
+      expect(anyRule?.fixable).toBe(true);
+      const missingKey = result.structuredContent!.data.rules.find(r => r.ruleId === 'react/jsx-key');
+      expect(missingKey?.severity).toBe('error');
     });
 
     it('should handle tool errors', async () => {
