@@ -10,7 +10,6 @@ import { useRepoSelection, useNodeHandlers, useSearchUI, usePanelActions, useGra
 export default function App() {
     const { T } = useTheme();
     const [view, setView] = useState<'graph' | 'quality'>('graph');
-    const [qualityLoopRunning, setQualityLoopRunning] = useState(false);
     const { repos, selectedRepo, showRepoSelector, setShowRepoSelector, handleRepoSelect, handleRepoDelete, refreshRepos } = useRepoSelection();
     const { graphData, filteredGraphData, patterns, addPattern, removePattern, scanExcludePatterns, wsStatus, scanProgress, scanning, setScanning, lastScan, setLastScan, handleScanAll, repoLoading } = useGraphData(selectedRepo, refreshRepos);
     const { selectedNode, handleClearSelection, handleNodeSelect } = useNodeHandlers(filteredGraphData);
@@ -18,29 +17,6 @@ export default function App() {
     const { showFileList, showFilterPanel, showViolationsPanel, handleShowRepoSelector, handleFileListOpen, handleFileListSelect, handleFileListClose, handleToggleFilterPanel, handleCloseFilterPanel, handleToggleViolationsPanel, handleCloseViolationsPanel, handleClear } = usePanelActions(handleClearSelection, handleNodeSelect, setShowRepoSelector, filteredGraphData, setScanning, setLastScan, selectedRepo, repos);
 
     const { totalViolations, overallRating, currentRepoLabel, scanPct } = useAppMetrics(filteredGraphData, selectedRepo, repos, scanProgress);
-
-    const handleStartQualityLoop = async () => {
-        try {
-            // 1. Set config: threshold 8.0, 1 worker
-            await fetch('http://127.0.0.1:5379/api/quality/config', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ threshold: 8.0, maxWorkers: 1 }),
-            });
-            // 2. Reset any previously failed items
-            await fetch('http://127.0.0.1:5379/api/quality/reset', { method: 'POST' });
-            // 3. Enqueue files below new threshold
-            await fetch('http://127.0.0.1:5379/api/quality/enqueue', { method: 'POST' });
-            // 4. Start the loop
-            await fetch('http://127.0.0.1:5379/api/quality/start', { method: 'POST' });
-            setQualityLoopRunning(true);
-            // 5. Switch to quality loop view
-            setView('quality');
-        } catch {
-            // Daemon not running or quality loop not available
-            setQualityLoopRunning(false);
-        }
-    };
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' }}>
@@ -58,7 +34,6 @@ export default function App() {
                 onSearchChange={handleSearchChange} onSearchFocus={handleSearchFocus}
                 onSearchBlur={handleSearchBlur} onSearchKeyDown={handleSearchKeyDown}
                 onSearchSelect={handleSearchSelect} onToggleViolationsPanel={handleToggleViolationsPanel}
-                onStartQualityLoop={handleStartQualityLoop} qualityLoopRunning={qualityLoopRunning}
             />
             {/* View switcher tabs */}
             <div style={{ display: 'flex', borderBottom: `1px solid ${T.border}`, background: T.panel, padding: '0 16px' }}>

@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueueItem, QueueStats, TrendDataPoint } from '../types';
 
+interface StatusResponse {
+  stats: QueueStats;
+  running: boolean;
+  paused: boolean;
+}
+
+interface QueueResponse {
+  items: QueueItem[];
+}
+
 export interface QualityState {
   stats: QueueStats | null;
   items: QueueItem[];
@@ -77,11 +87,11 @@ export function useQualityWebSocket() {
         ]);
 
         if (statusRes?.ok) {
-          const data = await statusRes.json() as any;
+          const data: StatusResponse = await statusRes.json();
           setState(prev => ({ ...prev, stats: data.stats, running: data.running, paused: data.paused }));
         }
         if (queueRes?.ok) {
-          const data = await queueRes.json() as any;
+          const data: QueueResponse = await queueRes.json();
           setState(prev => ({ ...prev, items: data.items ?? [] }));
         }
         if (trendsRes?.ok) {

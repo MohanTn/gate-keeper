@@ -1,10 +1,23 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { CycleInfo } from '../../graph/dependency-graph';
-import { RefactoringHint } from '../../types';
+import { CycleInfo, topoSort } from '../../graph/dependency-graph';
+import {
+  Fix,
+  FileAnalysis,
+  RefactoringHint,
+  RemediationPlan,
+  RemediationStep,
+  Violation,
+} from '../../types';
 import { RefactoringAdvisor } from '../../analyzer/refactoring-advisor';
 import { UniversalAnalyzer } from '../../analyzer/universal-analyzer';
 import { GraphResponse, GraphNodeData } from './types';
+
+const SEVERITY_GAIN: Record<Violation['severity'], number> = {
+  error: 1.5,
+  warning: 0.5,
+  info: 0.1,
+};
 
 // ── Shared instances ───────────────────────────────────────
 
@@ -115,4 +128,66 @@ async function computeHints(node: GraphNodeData, cycles: CycleInfo[]): Promise<R
   if (!fs.existsSync(node.id) || !fileAnalyzer.isSupportedFile(node.id)) return [];
   const freshAnalysis = await fileAnalyzer.analyze(node.id);
   return freshAnalysis ? refactoringAdvisor.suggest(freshAnalysis, cycles) : [];
+}
+
+function topViolationStep(analysis: FileAnalysis, dependencyOrder: number): RemediationStep | null {
+  const v = analysis.violations[0];
+  if (!v) return null;
+  const fixObj: Fix | undefined = typeof v.fix === 'object' ? v.fix : undefined;
+  const action: RemediationStep['action'] =
+    fixObj?.confidence === 'deterministic' && fixObj.replacement !== undefined ? 'replace' : 'manual';
+  return {
+    filePath: analysis.path,
+    ruleId: v.ruleId ?? v.type,
+    span: fixObj?.replaceSpan ?? v.span,
+    action,
+    replacement: action === 'replace' ? fixObj?.replacement : undefined,
+    estimatedRatingGain: SEVERITY_GAIN[v.severity] ?? 0.1,
+    dependencyOrder,
+  };
+}
+
+export async function buildRemediationPlan(
+  rootFile: string,
+  graph: GraphResponse,
+  directDeps: Set<string>,
+  allDeps: Set<string>,
+): Promise<RemediationPlan> {
+  const affectedNodes = graph.nodes.filter(n => allDeps.has(n.id));
+  const atRiskIds = affectedNodes
+    .filter(n => n.rating < 6)
+    .sort((a, b) => a.rating - b.rating)
+    .slice(0, 10)
+    .map(n => n.id);
+
+  // Restrict edges to the at-risk subgraph for ordering. Use full graph rating
+  // as the tiebreaker when a cycle stalls.
+  const subEdges = graph.edges.filter(
+    e => atRiskIds.includes(e.source) && atRiskIds.includes(e.target),
+  );
+  const ratingByNode = new Map<string, number>();
+  for (const n of graph.nodes) ratingByNode.set(n.id, n.rating);
+  const ordered = topoSort(atRiskIds, subEdges, ratingByNode);
+
+  const steps: RemediationStep[] = [];
+  for (let i = 0; i < ordered.length; i++) {
+    const filePath = ordered[i];
+    if (!fs.existsSync(filePath) || !fileAnalyzer.isSupportedFile(filePath)) continue;
+    const analysis = await fileAnalyzer.analyze(filePath);
+    if (!analysis) continue;
+    const step = topViolationStep(analysis, i);
+    if (step) steps.push(step);
+  }
+
+  const estimatedTotalGain = steps.reduce((acc, s) => acc + s.estimatedRatingGain, 0);
+
+  return {
+    rootFile,
+    blastRadius: {
+      direct: [...directDeps],
+      transitive: [...allDeps].filter(d => !directDeps.has(d)),
+    },
+    steps,
+    estimatedTotalGain: Math.round(estimatedTotalGain * 10) / 10,
+  };
 }

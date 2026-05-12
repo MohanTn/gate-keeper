@@ -1,4 +1,4 @@
-import React, { Component, ErrorInfo, useCallback } from 'react';
+import React, { Component, ErrorInfo, useMemo } from 'react';
 import { GraphData, GraphNode } from '../types';
 import { ThemeTokens, ratingColor, healthLabel } from '../ThemeContext';
 
@@ -138,13 +138,11 @@ function Td({ children, T, align = 'left' }: { children: React.ReactNode; T: The
 }
 
 function TableRow({ node, T, onNodeSelect }: { node: GraphNode; T: ThemeTokens; onNodeSelect?: (n: GraphNode) => void }) {
-  const handleClick = useCallback(() => onNodeSelect?.(node), [node, onNodeSelect]);
-  const handleMouseEnter = useCallback((e: React.MouseEvent<HTMLTableRowElement>) => {
-    e.currentTarget.style.background = T.panelHover;
-  }, [T.panelHover]);
-  const handleMouseLeave = useCallback((e: React.MouseEvent<HTMLTableRowElement>) => {
-    e.currentTarget.style.background = 'transparent';
-  }, []);
+  const { handleClick, handleMouseEnter, handleMouseLeave } = useMemo(() => ({
+    handleClick: () => onNodeSelect?.(node),
+    handleMouseEnter: (e: React.MouseEvent<HTMLTableRowElement>) => { e.currentTarget.style.background = T.panelHover; },
+    handleMouseLeave: (e: React.MouseEvent<HTMLTableRowElement>) => { e.currentTarget.style.background = 'transparent'; },
+  }), [node, onNodeSelect, T.panelHover]);
   return (
     <tr onClick={handleClick}
       style={{ borderBottom: `1px solid ${T.border}`, cursor: onNodeSelect ? 'pointer' : 'default' }}

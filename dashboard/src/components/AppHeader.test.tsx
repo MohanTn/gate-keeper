@@ -46,8 +46,6 @@ function makeProps(overrides: Partial<React.ComponentProps<typeof AppHeader>> = 
         onSearchKeyDown: jest.fn(),
         onSearchSelect: jest.fn(),
         onToggleViolationsPanel: jest.fn(),
-        onStartQualityLoop: jest.fn(),
-        qualityLoopRunning: false,
         T: darkTokens,
         ...overrides,
     };
@@ -102,7 +100,6 @@ describe('AppHeader', () => {
         const onScanAll = jest.fn();
         const onClearData = jest.fn();
         const onToggleViolationsPanel = jest.fn();
-        const onStartQualityLoop = jest.fn();
 
         renderWithTheme(
             <AppHeader
@@ -114,7 +111,6 @@ describe('AppHeader', () => {
                     onScanAll,
                     onClearData,
                     onToggleViolationsPanel,
-                    onStartQualityLoop,
                 })}
             />,
         );
@@ -139,9 +135,6 @@ describe('AppHeader', () => {
 
         fireEvent.click(screen.getByText('3'));
         expect(onToggleViolationsPanel).toHaveBeenCalled();
-
-        fireEvent.click(screen.getByText('Quality Loop'));
-        expect(onStartQualityLoop).toHaveBeenCalled();
     });
 
     it('renders the scan progress indicator while scanning', () => {

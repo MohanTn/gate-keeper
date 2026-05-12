@@ -14,6 +14,13 @@ export function QualityDashboard({ T }: Props) {
 
   const handleStart = async () => {
     try {
+      await fetch('http://127.0.0.1:5379/api/quality/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ threshold: 8.0, maxWorkers: 1 }),
+      });
+      await fetch('http://127.0.0.1:5379/api/quality/reset', { method: 'POST' });
+      await fetch('http://127.0.0.1:5379/api/quality/enqueue', { method: 'POST' });
       await fetch('http://127.0.0.1:5379/api/quality/start', { method: 'POST' });
     } catch { /* ignore */ }
   };
@@ -36,12 +43,6 @@ export function QualityDashboard({ T }: Props) {
     } catch { /* ignore */ }
   };
 
-  const handleEnqueue = async () => {
-    try {
-      await fetch('http://127.0.0.1:5379/api/quality/enqueue', { method: 'POST' });
-    } catch { /* ignore */ }
-  };
-
   const handleReset = async () => {
     try {
       await fetch('http://127.0.0.1:5379/api/quality/reset', { method: 'POST' });
@@ -56,7 +57,6 @@ export function QualityDashboard({ T }: Props) {
         {running && (
           <ActionButton label={paused ? 'Resume' : 'Pause'} onClick={paused ? handleResume : handlePause} color={paused ? '#22c55e' : '#eab308'} />
         )}
-        <ActionButton label="Enqueue" onClick={handleEnqueue} color="#3b82f6" />
         <ActionButton label="Reset Failed" onClick={handleReset} color="#a855f7" />
         <div style={{ flex: 1 }} />
         <div style={{ fontSize: 11, color: T.textMuted }}>

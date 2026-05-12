@@ -1,7 +1,33 @@
 import * as ts from 'typescript';
 import * as path from 'path';
 import * as fs from 'fs';
-import { Dependency, Metrics, Violation } from '../types';
+import { Dependency, Fix, Metrics, Span, Violation } from '../types';
+
+const RULE_ID_MAP: Record<string, string> = {
+  any_type: 'ts/no-any',
+  console_log: 'ts/no-console',
+  missing_key: 'react/jsx-key',
+  inline_handler: 'react/no-inline-handler',
+  hook_overload: 'react/hook-count',
+  duplicate_hooks: 'react/no-duplicate-hooks',
+  todo_placeholder: 'ts/no-todo',
+  tech_debt_marker: 'ts/tech-debt',
+  unimplemented_stub: 'ts/no-stub',
+};
+
+function spanOf(node: ts.Node, sf: ts.SourceFile): Span {
+  const start = sf.getLineAndCharacterOfPosition(node.getStart());
+  const end = sf.getLineAndCharacterOfPosition(node.getEnd());
+  return {
+    line: start.line + 1, column: start.character + 1,
+    endLine: end.line + 1, endColumn: end.character + 1,
+    offset: node.getStart(), length: node.getEnd() - node.getStart(),
+  };
+}
+
+function lineSpan(line: number, column: number, length: number): Span {
+  return { line, column, endLine: line, endColumn: column + length };
+}
 
 interface ComponentInfo {
   name: string;
@@ -140,9 +166,11 @@ export class TypeScriptAnalyzer {
       if (comp.hooks.length > 7) {
         violations.push({
           type: 'hook_overload',
+          ruleId: RULE_ID_MAP.hook_overload,
           severity: 'warning',
           message: `${comp.name} has ${comp.hooks.length} hooks — split into custom hooks or smaller components`,
           line: comp.line,
+          span: lineSpan(comp.line, 1, comp.name.length),
           fix: 'Extract groups of related hooks into a custom hook'
         });
       }
@@ -153,9 +181,11 @@ export class TypeScriptAnalyzer {
       if (duplicateHooks.length > 0) {
         violations.push({
           type: 'duplicate_hooks',
+          ruleId: RULE_ID_MAP.duplicate_hooks,
           severity: 'warning',
           message: `${comp.name} calls ${duplicateHooks.join(', ')} more than once`,
           line: comp.line,
+          span: lineSpan(comp.line, 1, comp.name.length),
           fix: 'Merge duplicate hook calls into a single call'
         });
       }
@@ -264,12 +294,14 @@ export class TypeScriptAnalyzer {
       ) {
         const callback = node.arguments[0];
         if (this.nodeContainsJSX(callback) && !this.callbackHasKeyProp(callback)) {
-          const pos = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+          const sp = spanOf(node, sourceFile);
           violations.push({
             type: 'missing_key',
+            ruleId: RULE_ID_MAP.missing_key,
             severity: 'error',
             message: 'JSX elements inside .map() are missing the required "key" prop',
-            line: pos.line + 1,
+            line: sp.line,
+            span: sp,
             fix: 'Add a unique key prop to each JSX element returned from .map()'
           });
         }
@@ -304,12 +336,14 @@ export class TypeScriptAnalyzer {
             val.expression &&
             (ts.isArrowFunction(val.expression) || ts.isFunctionExpression(val.expression))
           ) {
-            const pos = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+            const sp = spanOf(node, sourceFile);
             violations.push({
               type: 'inline_handler',
+              ruleId: RULE_ID_MAP.inline_handler,
               severity: 'info',
               message: `Inline function for "${name}" creates a new reference on every render`,
-              line: pos.line + 1,
+              line: sp.line,
+              span: sp,
               fix: 'Extract to a useCallback or a named function outside JSX'
             });
           }
@@ -326,12 +360,21 @@ export class TypeScriptAnalyzer {
     const visit = (node: ts.Node) => {
       // Explicit `any` usage
       if (node.kind === ts.SyntaxKind.AnyKeyword) {
-        const pos = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+        const sp = spanOf(node, sourceFile);
+        const fix: Fix = {
+          description: 'Replace "any" with "unknown" and narrow the type at use sites',
+          replacement: 'unknown',
+          replaceSpan: sp,
+          confidence: 'deterministic',
+        };
         violations.push({
           type: 'any_type',
+          ruleId: RULE_ID_MAP.any_type,
           severity: 'warning',
           message: 'Avoid the "any" type — use explicit typing or "unknown"',
-          line: pos.line + 1
+          line: sp.line,
+          span: sp,
+          fix,
         });
       }
 
@@ -343,12 +386,21 @@ export class TypeScriptAnalyzer {
         node.expression.expression.text === 'console' &&
         node.expression.name.text === 'log'
       ) {
-        const pos = sourceFile.getLineAndCharacterOfPosition(node.getStart());
+        const sp = spanOf(node.expression, sourceFile);
+        const fix: Fix = {
+          description: 'Replace console.log with a structured logger call',
+          replacement: 'logger.debug',
+          replaceSpan: sp,
+          confidence: 'deterministic',
+        };
         violations.push({
           type: 'console_log',
+          ruleId: RULE_ID_MAP.console_log,
           severity: 'info',
           message: 'console.log left in code — remove before merging',
-          line: pos.line + 1
+          line: sp.line,
+          span: sp,
+          fix,
         });
       }
 
@@ -383,9 +435,11 @@ export class TypeScriptAnalyzer {
       if (incompleteMatch) {
         violations.push({
           type: 'todo_placeholder',
+          ruleId: RULE_ID_MAP.todo_placeholder,
           severity: 'warning',
           message: `${incompleteMatch[1].toUpperCase()} marker at line ${lineNum} — resolve before merging`,
           line: lineNum,
+          span: lineSpan(lineNum, (incompleteMatch.index ?? 0) + 1, incompleteMatch[0].length),
           fix: 'Replace with the actual implementation'
         });
         continue;
@@ -395,20 +449,25 @@ export class TypeScriptAnalyzer {
       if (debtMatch) {
         violations.push({
           type: 'tech_debt_marker',
+          ruleId: RULE_ID_MAP.tech_debt_marker,
           severity: 'info',
           message: `${debtMatch[1].toUpperCase()} marker at line ${lineNum} — track in your issue tracker`,
           line: lineNum,
+          span: lineSpan(lineNum, (debtMatch.index ?? 0) + 1, debtMatch[0].length),
           fix: 'Create a tracking issue and replace with a proper solution'
         });
         continue;
       }
 
-      if (notImplPattern.test(line)) {
+      const stubMatch = notImplPattern.exec(line);
+      if (stubMatch) {
         violations.push({
           type: 'unimplemented_stub',
+          ruleId: RULE_ID_MAP.unimplemented_stub,
           severity: 'error',
           message: `Unimplemented stub at line ${lineNum} — will throw at runtime`,
           line: lineNum,
+          span: lineSpan(lineNum, (stubMatch.index ?? 0) + 1, stubMatch[0].length),
           fix: 'Implement the required functionality'
         });
       }

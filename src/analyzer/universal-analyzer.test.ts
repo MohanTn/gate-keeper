@@ -302,4 +302,51 @@ describe('UniversalAnalyzer', () => {
       expect(result?.analyzedAt).toBeLessThanOrEqual(afterAnalysis);
     });
   });
+
+  describe('agent-grade enrichment (Phase 4)', () => {
+    it('attaches ratingBreakdown, fileHash, and analyzerVersion to every analysis', async () => {
+      const tsFile = path.join(tempDir, 'enrich.ts');
+      fs.writeFileSync(tsFile, `const x: any = 1;\nconsole.log(x);\n`);
+
+      const result = await analyzer.analyze(tsFile);
+
+      expect(result).not.toBeNull();
+      expect(result?.analyzerVersion).toBe('2.0');
+      expect(typeof result?.fileHash).toBe('string');
+      expect(result?.fileHash).toMatch(/^[a-f0-9]{40}$/);
+      expect(Array.isArray(result?.ratingBreakdown)).toBe(true);
+      expect(result!.ratingBreakdown!.length).toBeGreaterThan(0);
+      const cats = result!.ratingBreakdown!.map(b => b.category);
+      expect(cats.some(c => c.startsWith('Warnings'))).toBe(true);
+    });
+
+    it('changes fileHash when file content changes', async () => {
+      const tsFile = path.join(tempDir, 'hash.ts');
+      fs.writeFileSync(tsFile, 'export const x = 1;');
+      const r1 = await analyzer.analyze(tsFile);
+
+      fs.writeFileSync(tsFile, 'export const x = 2;');
+      const r2 = await analyzer.analyze(tsFile);
+
+      expect(r1?.fileHash).toBeDefined();
+      expect(r2?.fileHash).toBeDefined();
+      expect(r1?.fileHash).not.toBe(r2?.fileHash);
+    });
+
+    it('sorts violations by priorityScore desc (deterministic-fix errors first)', async () => {
+      const tsFile = path.join(tempDir, 'priority.ts');
+      fs.writeFileSync(tsFile, `console.log(1);\nconst x: any = 1;\n`);
+
+      const result = await analyzer.analyze(tsFile);
+      const vs = result!.violations;
+
+      expect(vs.length).toBeGreaterThanOrEqual(2);
+      for (let i = 1; i < vs.length; i++) {
+        expect(vs[i - 1].priorityScore ?? 0).toBeGreaterThanOrEqual(vs[i].priorityScore ?? 0);
+      }
+      const anyIdx = vs.findIndex(v => v.type === 'any_type');
+      const consoleIdx = vs.findIndex(v => v.type === 'console_log');
+      expect(anyIdx).toBeLessThan(consoleIdx);
+    });
+  });
 });

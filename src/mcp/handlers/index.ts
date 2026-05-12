@@ -5,10 +5,11 @@
  * the tool-call router used by the JSON-RPC message handler.
  */
 
-import { text } from './shared';
+import { text, McpResponse } from './shared';
 import {
   handleAnalyzeFile,
   handleAnalyzeCode,
+  handleAnalyzeMany,
   handleCodebaseHealth,
   handleQualityRules,
 } from './analysis';
@@ -29,6 +30,7 @@ export { text };
 export {
   handleAnalyzeFile,
   handleAnalyzeCode,
+  handleAnalyzeMany,
   handleCodebaseHealth,
   handleQualityRules,
 };
@@ -48,12 +50,14 @@ export {
 export async function handleToolCall(
   name: string,
   args: Record<string, unknown>
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<McpResponse> {
   switch (name) {
     case 'analyze_file':
       return handleAnalyzeFile(args);
     case 'analyze_code':
       return handleAnalyzeCode(args);
+    case 'analyze_many':
+      return handleAnalyzeMany(args);
     case 'get_codebase_health':
       return handleCodebaseHealth(args);
     case 'get_quality_rules':

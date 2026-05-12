@@ -6,7 +6,7 @@ import { PatternDetector } from '../../analyzer/pattern-detector';
 import { FileAnalysis, PatternReport } from '../../types';
 import { CycleInfo } from '../../graph/dependency-graph';
 import { fetchDaemonApi, findGitRoot, findSourceFiles } from '../helpers';
-import { text } from './shared';
+import { text, envelope, McpResponse } from './shared';
 
 // ── Shared instances ───────────────────────────────────────
 
@@ -16,7 +16,7 @@ const patternDetector = new PatternDetector();
 
 // ── Handlers ───────────────────────────────────────────────
 
-export async function handleSuggestRefactoring(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleSuggestRefactoring(args: Record<string, unknown>): Promise<McpResponse> {
   const filePath = String(args.file_path ?? '');
   if (!filePath) return text('Error: file_path is required.');
   if (!fs.existsSync(filePath)) return text(`Error: File not found: ${filePath}`);
@@ -35,7 +35,11 @@ export async function handleSuggestRefactoring(args: Record<string, unknown>): P
   const hints = refactoringAdvisor.suggest(analysis, cycles);
 
   if (hints.length === 0) {
-    return text(`## Refactoring Suggestions: ${path.basename(filePath)}\n\nNo refactoring hints — file looks clean!`);
+    return envelope(
+      'suggest_refactoring',
+      { file: analysis, hints: [], rating: analysis.rating, totalPotentialGain: 0 },
+      `## Refactoring Suggestions: ${path.basename(filePath)}\n\nNo refactoring hints — file looks clean!`,
+    );
   }
 
   const lines = [
@@ -55,10 +59,15 @@ export async function handleSuggestRefactoring(args: Record<string, unknown>): P
     lines.push('');
   });
 
-  return text(lines.join('\n'));
+  const totalPotentialGain = Math.round(hints.reduce((s, h) => s + h.estimatedRatingGain, 0) * 10) / 10;
+  return envelope(
+    'suggest_refactoring',
+    { file: analysis, hints, rating: analysis.rating, totalPotentialGain },
+    lines.join('\n'),
+  );
 }
 
-export async function handleViolationPatterns(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleViolationPatterns(args: Record<string, unknown>): Promise<McpResponse> {
   const repo = String(args.repo ?? findGitRoot(process.cwd()));
   const encodedRepo = encodeURIComponent(repo);
 
@@ -79,7 +88,11 @@ export async function handleViolationPatterns(args: Record<string, unknown>): Pr
   }
 
   if (reports.length === 0) {
-    return text('## Violation Patterns\n\nNo violations found across the codebase. Everything looks clean!');
+    return envelope(
+      'get_violation_patterns',
+      { repo, patterns: [], totalGain: 0, fixOrder: [] },
+      '## Violation Patterns\n\nNo violations found across the codebase. Everything looks clean!',
+    );
   }
 
   const totalGain = Math.round(reports.reduce((s, r) => s + r.estimatedRatingGain, 0) * 10) / 10;
@@ -104,5 +117,14 @@ export async function handleViolationPatterns(args: Record<string, unknown>): Pr
     lines.push('');
   }
 
-  return text(lines.join('\n'));
+  // Aggregate files across all patterns to give the queue a single fix order.
+  const fileSet = new Set<string>();
+  for (const r of reports) for (const f of r.affectedFiles) fileSet.add(f);
+  const fixOrder = [...fileSet];
+
+  return envelope(
+    'get_violation_patterns',
+    { repo, patterns: reports, totalGain, fixOrder },
+    lines.join('\n'),
+  );
 }

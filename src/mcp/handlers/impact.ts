@@ -2,12 +2,13 @@ import * as path from 'path';
 import { CycleInfo } from '../../graph/dependency-graph';
 import { fetchDaemonApi, findGitRoot } from '../helpers';
 import { GraphResponse } from './types';
-import { text } from './shared';
+import { text, envelope, McpResponse } from './shared';
 import {
   renderDirectDependents,
   renderTransitiveDependents,
   renderAtRiskDependents,
   renderRemediationPlan,
+  buildRemediationPlan,
 } from './impact-format';
 
 // ── Graph traversal helpers ─────────────────────────────────
@@ -44,7 +45,7 @@ function collectTransitiveDependents(
 
 export async function handleImpactAnalysis(
   args: Record<string, unknown>,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<McpResponse> {
   const filePath = String(args.file_path ?? '');
   if (!filePath) return text('Error: file_path is required.');
 
@@ -75,12 +76,22 @@ export async function handleImpactAnalysis(
     lines.push('No other files depend on this file. Changes here have no downstream impact.');
   }
 
-  return text(lines.join('\n'));
+  const affectedNodes = graph.nodes.filter(n => allDeps.has(n.id));
+  const atRisk = affectedNodes.filter(n => n.rating < 6).sort((a, b) => a.rating - b.rating);
+
+  const data = {
+    filePath,
+    direct: [...directDeps],
+    transitive: transitiveDeps,
+    atRisk,
+  };
+
+  return envelope('get_impact_analysis', data, lines.join('\n'));
 }
 
 export async function handlePredictImpactWithRemediation(
   args: Record<string, unknown>,
-): Promise<{ content: Array<{ type: string; text: string }> }> {
+): Promise<McpResponse> {
   const filePath = String(args.file_path ?? '');
   if (!filePath) return text('Error: file_path is required.');
 
@@ -103,6 +114,7 @@ export async function handlePredictImpactWithRemediation(
   const transitiveDeps = [...allDeps].filter(d => !directDeps.has(d));
 
   const remediation = await renderRemediationPlan(graph, allDeps, cycles, repo);
+  const plan = await buildRemediationPlan(filePath, graph, directDeps, allDeps);
 
   const lines: string[] = [
     `## Impact + Remediation: ${path.basename(filePath)}`,
@@ -118,5 +130,5 @@ export async function handlePredictImpactWithRemediation(
     lines.push('No other files depend on this file. Changes here have no downstream impact.');
   }
 
-  return text(lines.join('\n'));
+  return envelope('predict_impact_with_remediation', plan, lines.join('\n'));
 }

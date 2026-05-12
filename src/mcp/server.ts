@@ -175,6 +175,27 @@ export const TOOLS = [
     },
   },
   {
+    name: 'analyze_many',
+    description:
+      'Analyze a batch of source files in one MCP call. Returns FileAnalysis[] plus a `fixOrder` array — ' +
+      'a topologically sorted list (leaves first) so an autonomous agent can fix dependencies before dependents.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        file_paths: {
+          type: 'array',
+          description: 'Absolute paths to source files to analyze in parallel',
+          items: { type: 'string' },
+        },
+        max_parallel: {
+          type: 'number',
+          description: 'Maximum concurrent analyzers (default 4)',
+        },
+      },
+      required: ['file_paths'],
+    },
+  },
+  {
     name: 'get_violation_patterns',
     description:
       'Return a ranked table of violation patterns across the entire codebase: ' +

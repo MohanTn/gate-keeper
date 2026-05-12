@@ -1,4 +1,4 @@
-import { DependencyGraph } from './dependency-graph';
+import { DependencyGraph, topoSort } from './dependency-graph';
 import { FileAnalysis } from '../types';
 
 describe('DependencyGraph', () => {
@@ -264,5 +264,50 @@ describe('DependencyGraph', () => {
       const rating = graph.overallRating();
       expect(rating).toBe(8);
     });
+  });
+});
+
+describe('topoSort (Phase 6)', () => {
+  it('orders pure leaves before their dependents', () => {
+    const order = topoSort(
+      ['A', 'B', 'C'],
+      [
+        { source: 'A', target: 'B' },
+        { source: 'B', target: 'C' },
+      ],
+    );
+    expect(order.indexOf('C')).toBeLessThan(order.indexOf('B'));
+    expect(order.indexOf('B')).toBeLessThan(order.indexOf('A'));
+  });
+
+  it('breaks cycles by lowest rating first', () => {
+    const order = topoSort(
+      ['A', 'B'],
+      [
+        { source: 'A', target: 'B' },
+        { source: 'B', target: 'A' },
+      ],
+      new Map([['A', 8], ['B', 4]]),
+    );
+    expect(order.length).toBe(2);
+    expect(order.indexOf('B')).toBeLessThan(order.indexOf('A'));
+  });
+
+  it('ignores edges referencing unknown nodes', () => {
+    const order = topoSort(
+      ['A', 'B'],
+      [
+        { source: 'A', target: 'B' },
+        { source: 'A', target: 'GHOST' },
+      ],
+    );
+    expect(order).toHaveLength(2);
+    expect(order.indexOf('B')).toBeLessThan(order.indexOf('A'));
+  });
+
+  it('returns nodes with no edges in any order without crashing', () => {
+    const order = topoSort(['X', 'Y', 'Z'], []);
+    expect(order).toHaveLength(3);
+    expect(new Set(order)).toEqual(new Set(['X', 'Y', 'Z']));
   });
 });

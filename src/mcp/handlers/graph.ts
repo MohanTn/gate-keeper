@@ -1,9 +1,9 @@
 import * as path from 'path';
 import { fetchDaemonApi, findGitRoot } from '../helpers';
 import { GraphResponse, FileDetailResponse } from './types';
-import { text } from './shared';
+import { text, envelope, McpResponse } from './shared';
 
-export async function handleFileContext(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleFileContext(args: Record<string, unknown>): Promise<McpResponse> {
   const filePath = String(args.file_path ?? '');
   if (!filePath) return text('Error: file_path is required.');
 
@@ -99,10 +99,22 @@ export async function handleFileContext(args: Record<string, unknown>): Promise<
     lines.push('');
   }
 
-  return text(lines.join('\n'));
+  const data = {
+    filePath,
+    rating,
+    file: detail?.analysis ?? null,
+    imports,
+    dependents,
+    cycles: fileCycles,
+    ratingBreakdown: detail?.ratingBreakdown ?? [],
+    ratingTrend: trends,
+    gitDiff: detail?.gitDiff ?? null,
+  };
+
+  return envelope('get_file_context', data, lines.join('\n'));
 }
 
-export async function handleDependencyGraph(args: Record<string, unknown>): Promise<{ content: Array<{ type: string; text: string }> }> {
+export async function handleDependencyGraph(args: Record<string, unknown>): Promise<McpResponse> {
   const repo = String(args.repo ?? findGitRoot(process.cwd()));
   const encodedRepo = encodeURIComponent(repo);
 
@@ -186,5 +198,28 @@ export async function handleDependencyGraph(args: Record<string, unknown>): Prom
     lines.push('');
   }
 
-  return text(lines.join('\n'));
+  const adjacency: Record<string, string[]> = {};
+  const reverseAdjacency: Record<string, string[]> = {};
+  for (const edge of graph.edges) {
+    (adjacency[edge.source] ??= []).push(edge.target);
+    (reverseAdjacency[edge.target] ??= []).push(edge.source);
+  }
+
+  const data = {
+    repo,
+    nodes: graph.nodes,
+    edges: graph.edges,
+    cycles,
+    overallRating: status?.overallRating ?? null,
+    distribution: { excellent, good, poor },
+    mostConnected: mostConnected.map(([id, count]) => ({ id, connections: count })),
+    worstFiles: worstNodes.filter(n => n.rating < 8),
+    complexityHotspots: complexFiles.map(n => ({
+      id: n.id, complexity: n.metrics.cyclomaticComplexity, linesOfCode: n.metrics.linesOfCode,
+    })),
+    adjacency,
+    reverseAdjacency,
+  };
+
+  return envelope('get_dependency_graph', data, lines.join('\n'));
 }

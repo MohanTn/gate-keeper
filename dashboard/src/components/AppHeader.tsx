@@ -33,8 +33,6 @@ interface AppHeaderProps {
     onSearchKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
     onSearchSelect: (node: GraphNode) => void;
     onToggleViolationsPanel: () => void;
-    onStartQualityLoop: () => void;
-    qualityLoopRunning: boolean;
     T: ThemeTokens;
 }
 
@@ -62,7 +60,7 @@ export function AppHeader({
     searchQuery, searchRef, searchResults, showSearchDropdown,
     onShowRepoSelector, onToggleFilterPanel, onFileListOpen, onScanAll, onClearData,
     onSearchChange, onSearchFocus, onSearchBlur, onSearchKeyDown, onSearchSelect,
-    onToggleViolationsPanel, onStartQualityLoop, qualityLoopRunning, T,
+    onToggleViolationsPanel, T,
 }: AppHeaderProps) {
     const { mode, toggleTheme } = useTheme();
     return (
@@ -144,21 +142,6 @@ export function AppHeader({
                 <HeaderButton label="Scan all" onClick={onScanAll} disabled={wsStatus !== 'connected'} primary />
             )}
             <HeaderButton label="Clear" onClick={onClearData} disabled={!selectedRepo || wsStatus !== 'connected'} danger />
-
-            <button
-                onClick={onStartQualityLoop}
-                title="Start quality loop (threshold 8.0, 1 worker)"
-                style={{
-                    height: 26, padding: '0 10px', display: 'flex', alignItems: 'center', gap: 5,
-                    background: qualityLoopRunning ? '#14532d' : 'transparent',
-                    border: `1px solid ${qualityLoopRunning ? '#4ade80' : T.border}`, borderRadius: 4,
-                    color: qualityLoopRunning ? '#4ade80' : T.textMuted, cursor: 'pointer',
-                    fontSize: 11, fontWeight: 500, flexShrink: 0,
-                }}
-            >
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: qualityLoopRunning ? '#4ade80' : '#6b7280', display: 'inline-block' }} />
-                {qualityLoopRunning ? 'Quality Loop' : 'Quality Loop'}
-            </button>
 
             <button
                 onClick={toggleTheme}
