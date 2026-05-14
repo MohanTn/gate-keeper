@@ -23,10 +23,8 @@ Every file write is analyzed in real time (TypeScript Compiler API / Roslyn), ra
 ## Quick Start
 
 ```bash
-npx tsx src/cli/setup.ts --all     # one-shot: hooks + daemon + scan
-# or manually:
-bash scripts/setup.sh               # install + build
-npm run daemon                      # start the daemon
+# One command after git clone: install deps + build + hooks + daemon + scan
+npm run setup:portable
 ```
 
 Then open **http://localhost:5378/viz** — and the first time your AI edits a file, it's blocked if 3+ fragile dependents will break, and the post-edit quality check runs automatically.
@@ -102,11 +100,23 @@ A force-directed dependency graph updates with every edit. Node colors encode qu
 
 ## One-Shot Setup
 
+After cloning the repo anywhere on disk:
+
 ```bash
-npx tsx src/cli/setup.ts --all
+npm run setup:portable
 ```
 
-This single command does:
+This single command (which runs `npm run build:all && npx tsx src/cli/setup.ts --all`) resolves all paths dynamically — it works from any filesystem location on any machine.
+
+Or run the setup tool directly for specific targets:
+
+```bash
+npx tsx src/cli/setup.ts --all              # everything at once
+npx tsx src/cli/setup.ts --claude           # Claude Code hooks only
+npx tsx src/cli/setup.ts --copilot          # Copilot / VS Code MCP only
+```
+
+Whichever way you call it, `--all` runs these steps:
 
 | Step | Produces |
 |------|----------|
@@ -118,13 +128,7 @@ This single command does:
 | **Git hooks** | post-commit + post-checkout (auto-analyze on commit) |
 | **Daemon + scan** | Starts daemon, runs initial graph scan |
 
-Or install for specific platforms:
-
-```bash
-npx tsx src/cli/setup.ts --claude              # Claude Code hooks only
-npx tsx src/cli/setup.ts --copilot --vscode    # Copilot MCP + .vscode/mcp.json
-npx tsx src/cli/setup.ts --github-action       # CI workflow only
-```
+Or install for specific platforms — same commands as listed above.
 
 ---
 
