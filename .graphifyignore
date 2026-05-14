@@ -1,0 +1,25 @@
+# Gate Keeper — graphify ignore patterns
+# Files matching these patterns are excluded from the dependency graph.
+
+# Generated files
+*.generated.*
+*.g.cs
+*.Designer.cs
+
+# Build output
+dist/
+build/
+out/
+
+# Dependencies
+node_modules/
+vendor/
+
+# Test fixtures and mocks
+**/__snapshots__/**
+**/fixtures/**
+
+# Minified and bundled
+*.min.js
+*.bundle.js
+*.d.ts

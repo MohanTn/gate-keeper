@@ -25,6 +25,28 @@ import {
   handleSuggestRefactoring,
   handleViolationPatterns,
 } from './improvement';
+import {
+  handleGetImpactSet,
+  handleGetCentralityRank,
+  handleTracePath,
+  handleSummarizeFile,
+  handleFindCallers,
+  handleCheckPreEditSafety,
+  handleGetSessionMetrics,
+} from './graph-query';
+import {
+  handleGetGraphReport,
+  handleQueryGraph,
+  handleExplainNode,
+  handleExportGraph,
+  handleMergeGraphs,
+  handleGetGraphViz,
+} from './graph-intelligence';
+import {
+  handleInstallPlatform,
+  handleInstallGitHooks,
+} from './platform-installer';
+import { handlePRReview } from './pr-review';
 
 export { text };
 export {
@@ -46,6 +68,25 @@ export {
   handleSuggestRefactoring,
   handleViolationPatterns,
 };
+export {
+  handleGetImpactSet,
+  handleGetCentralityRank,
+  handleTracePath,
+  handleSummarizeFile,
+  handleFindCallers,
+  handleCheckPreEditSafety,
+  handleGetSessionMetrics,
+};
+export {
+  handleGetGraphReport,
+  handleQueryGraph,
+  handleExplainNode,
+  handleExportGraph,
+  handleMergeGraphs,
+  handleGetGraphViz,
+};
+export { handleInstallPlatform, handleInstallGitHooks };
+export { handlePRReview };
 
 export async function handleToolCall(
   name: string,
@@ -74,6 +115,41 @@ export async function handleToolCall(
       return handlePredictImpactWithRemediation(args);
     case 'get_violation_patterns':
       return handleViolationPatterns(args);
+    // Graph-aware token-efficient tools
+    case 'get_impact_set':
+      return handleGetImpactSet(args);
+    case 'get_centrality_rank':
+      return handleGetCentralityRank(args);
+    case 'trace_path':
+      return handleTracePath(args);
+    case 'summarize_file':
+      return handleSummarizeFile(args);
+    case 'find_callers':
+      return handleFindCallers(args);
+    case 'check_pre_edit_safety':
+      return handleCheckPreEditSafety(args);
+    case 'get_session_metrics':
+      return handleGetSessionMetrics();
+    // Knowledge graph intelligence tools
+    case 'get_graph_report':
+      return handleGetGraphReport(args);
+    case 'query_graph':
+      return handleQueryGraph(args);
+    case 'explain_node':
+      return handleExplainNode(args);
+    case 'export_graph':
+      return handleExportGraph(args);
+    case 'merge_graphs':
+      return handleMergeGraphs(args);
+    case 'get_graph_viz':
+      return handleGetGraphViz(args);
+    // Platform integration tools
+    case 'install_platform':
+      return handleInstallPlatform(args);
+    case 'install_git_hooks':
+      return handleInstallGitHooks(args);
+    case 'pr_review':
+      return handlePRReview(args);
     default:
       return text(`Unknown tool: ${name}`);
   }

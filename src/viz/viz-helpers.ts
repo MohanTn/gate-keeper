@@ -49,7 +49,10 @@ export function shouldExcludeFile(filePath: string, ext: string, patterns: Confi
   return false;
 }
 
-export function* walkFiles(dir: string): Generator<string> {
+export function* walkFiles(
+  dir: string,
+  filter?: (filePath: string) => boolean,
+): Generator<string> {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -57,11 +60,12 @@ export function* walkFiles(dir: string): Generator<string> {
     return;
   }
   for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SCAN_EXCLUDE_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
-      yield* walkFiles(path.join(dir, entry.name));
+      yield* walkFiles(fullPath, filter);
     } else if (entry.isFile()) {
-      yield path.join(dir, entry.name);
+      if (!filter || filter(fullPath)) yield fullPath;
     }
   }
 }

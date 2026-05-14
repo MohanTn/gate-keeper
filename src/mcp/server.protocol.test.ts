@@ -58,8 +58,8 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(Array.isArray(TOOLS)).toBe(true);
     });
 
-    it('should have 11 tools', () => {
-      expect(TOOLS.length).toBe(11);
+    it('should have 27 tools', () => {
+      expect(TOOLS.length).toBe(27);
     });
 
     it('should have required tool properties', () => {
@@ -117,7 +117,7 @@ describe('MCP Server - JSON-RPC Protocol', () => {
       expect(capturedOutputs.length).toBe(1);
       const response = JSON.parse(capturedOutputs[0]) as JsonRpcResponse;
       expect(response.result).toHaveProperty('tools');
-      expect((response.result as { tools: unknown[] }).tools.length).toBe(11);
+      expect((response.result as { tools: unknown[] }).tools.length).toBe(27);
     });
   });
 

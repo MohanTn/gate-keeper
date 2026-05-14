@@ -4,6 +4,7 @@ import { SqliteCache } from '../cache/sqlite-cache';
 import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { FileAnalysis, Config, WSMessage } from '../types';
 import { walkFiles, shouldExcludeFile } from './viz-helpers';
+import { loadGraphifyIgnore, shouldIgnoreByGraphifyIgnore } from '../graph/graphify-ignore';
 import { readArchConfig, writeArchConfig, autoDetectLayer, DEFAULT_LAYERS, getEffectiveLayer } from '../arch/arch-config-manager';
 
 interface ScannerDeps {
@@ -56,11 +57,16 @@ export async function scan(deps: ScannerDeps): Promise<void> {
 
   const seen = new Set<string>();
   const toScan: Array<{ filePath: string; root: string }> = [];
+  // Build per-root .graphifyignore rule sets once, reuse across all files
+  const ignoreRules = new Map(Array.from(roots).map(r => [r, loadGraphifyIgnore(r)]));
+
   for (const root of roots) {
+    const rules = ignoreRules.get(root) ?? [];
     for (const filePath of walkFiles(root)) {
       if (!seen.has(filePath) && deps.analyzer.isSupportedFile(filePath) && !activePaths.has(filePath)) {
         const ext = path.extname(filePath);
         if (shouldExcludeFile(filePath, ext, deps.config.scanExcludePatterns)) continue;
+        if (shouldIgnoreByGraphifyIgnore(filePath, root, rules)) continue;
         seen.add(filePath);
         toScan.push({ filePath, root });
       }
@@ -176,10 +182,12 @@ export async function scanRepo(deps: ScannerDeps, repoRoot: string, force = fals
   }
 
   const toScan: string[] = [];
+  const ignoreRules = loadGraphifyIgnore(repoRoot);
   for (const filePath of walkFiles(repoRoot)) {
     if (deps.analyzer.isSupportedFile(filePath) && !cachedPaths.has(filePath)) {
       const ext = path.extname(filePath);
       if (shouldExcludeFile(filePath, ext, deps.config.scanExcludePatterns)) continue;
+      if (shouldIgnoreByGraphifyIgnore(filePath, repoRoot, ignoreRules)) continue;
       toScan.push(filePath);
     }
   }

@@ -18,6 +18,7 @@ import { VizServer } from './viz/viz-server';
 import { Config, DaemonRequest, RepoMetadata } from './types';
 import { QualityOrchestrator, loadQualityConfig } from './quality-loop/orchestrator';
 import { mergeFileLayer, getEffectiveLayer, readArchConfig, DEFAULT_LAYERS } from './arch/arch-config-manager';
+import { WatchMode } from './daemon/watch-mode';
 
 declare global {
   namespace NodeJS {
@@ -131,6 +132,19 @@ export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const noScan = args.includes('--no-scan');
   const qualityLoop = args.includes('--quality-loop');
+  const watchMode = args.includes('--watch');
+  const queryMode = args.includes('--query') || args.includes('-q');
+
+  // --query mode: start REPL instead of daemon
+  if (queryMode) {
+    const repoIndex = args.indexOf('--query') + 1 || args.indexOf('-q') + 1;
+    const repo = (args[repoIndex] && !args[repoIndex]!.startsWith('-'))
+      ? args[repoIndex]!
+      : findGitRoot(process.cwd());
+    const { startRepl } = await import('./cli/query-repl');
+    await startRepl(repo);
+    return; // REPL handles its own process.exit
+  }
 
   ensurePidFile();
   ensureConfigFile();
@@ -180,6 +194,31 @@ export async function main(): Promise<void> {
     });
   } else {
     console.error('[gate-keeper] Started with --no-scan, skipping initial scan');
+  }
+
+  // Graph watch mode — polls source files for mtime changes and re-analyzes
+  if (watchMode) {
+    const watcher = new WatchMode();
+    const POLL_MS = parseInt(process.env['GK_WATCH_INTERVAL'] ?? '5000', 10);
+    watcher.start(repoRoot, (changedFiles) => {
+      console.error(`[gate-keeper] Watch: ${changedFiles.length} changed file(s) — re-analyzing`);
+      for (const fp of changedFiles) {
+        // Same logic as the /analyze IPC endpoint — inline it for watch mode
+        (async () => {
+          try {
+            const analysis = await analyzer.analyze(fp);
+            if (!analysis) return;
+            analysis.repoRoot = repoRoot;
+            cache.save(analysis);
+            vizServer.pushAnalysis(analysis);
+          } catch (err) {
+            console.error(`[gate-keeper] Watch re-analysis error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+      }
+    }, POLL_MS);
+    console.error(`[gate-keeper] Watch mode active (polling every ${POLL_MS}ms) for ${repoRoot}`);
+    process.on('exit', () => watcher.stop());
   }
 
   // IPC HTTP server — only binds to localhost
