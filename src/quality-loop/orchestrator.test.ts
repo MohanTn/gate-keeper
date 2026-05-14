@@ -4,6 +4,8 @@ import * as path from 'path';
 import { SqliteCache } from '../cache/sqlite-cache';
 import { QualityOrchestrator, loadQualityConfig, saveQualityConfig } from './orchestrator';
 import { FixWorker } from './fix-worker';
+import * as cp from 'child_process';
+import { QueueManager } from './queue-manager';
 import { FileAnalysis, QualityLoopConfig, WorkerResult, WSMessage } from '../types';
 
 // Neutralize FixWorker — every `new FixWorker(...)` in run()/runWorker() gets a stub
@@ -23,6 +25,17 @@ jest.mock('./fix-worker', () => ({
     } satisfies WorkerResult),
   })),
 }));
+
+// Wrap fs.existsSync and child_process.execSync in jest.fn() so resolveClaudePath tests
+// can control which paths "exist" and whether `which claude` fails.
+jest.mock('fs', () => {
+  const actual = jest.requireActual<typeof import('fs')>('fs');
+  return { ...actual, existsSync: jest.fn().mockImplementation(actual.existsSync) };
+});
+jest.mock('child_process', () => {
+  const actual = jest.requireActual<typeof import('child_process')>('child_process');
+  return { ...actual, execSync: jest.fn().mockImplementation(actual.execSync) };
+});
 
 const FixWorkerMock = FixWorker as unknown as jest.Mock;
 
@@ -179,6 +192,36 @@ describe('loadQualityConfig', () => {
   });
 });
 
+describe('loadQualityConfig error handling', () => {
+  // QUALITY_CONFIG_PATH is a module-level constant derived from HOME at import time.
+  // We must work with the real path directly.
+
+  it('returns defaults on corrupt config file', () => {
+    const actualHome = process.env.HOME ?? '/tmp';
+    const configPath = path.join(actualHome, '.gate-keeper', 'quality-config.json');
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+
+    // Backup any existing config so we can restore it
+    let backup: string | null = null;
+    if (fs.existsSync(configPath)) {
+      backup = fs.readFileSync(configPath, 'utf8');
+    }
+
+    try {
+      fs.writeFileSync(configPath, 'not valid json{', 'utf8');
+      const cfg = loadQualityConfig();
+      expect(cfg.threshold).toBe(7.0);
+      expect(cfg.workerMode).toBe('auto');
+    } finally {
+      if (backup !== null) {
+        fs.writeFileSync(configPath, backup, 'utf8');
+      } else {
+        try { fs.unlinkSync(configPath); } catch { /* file may not exist */ }
+      }
+    }
+  });
+});
+
 describe('saveQualityConfig', () => {
   it('writes JSON to disk that loadQualityConfig can read back', () => {
     const cfg: QualityLoopConfig = {
@@ -214,6 +257,8 @@ type OrchestratorInternals = {
   log: (msg: string) => void;
   activeWorkers: Map<string, { queueId: number; filePath: string; promise: Promise<void>; startTime: number; timeout: NodeJS.Timeout }>;
   runWorker: (queueId: number, filePath: string, workerId: string, startTime: number) => Promise<void>;
+  resolveClaudePath: () => string;
+  queue: QueueManager;
   loopPromise: Promise<void> | null;
   config: QualityLoopConfig;
 };
@@ -281,6 +326,28 @@ describe('QualityOrchestrator.run() — empty queue path', () => {
     if (internals.loopPromise) await internals.loopPromise.catch(() => {});
     expect(broadcasts.some(b => b.type === 'queue_progress' && b.queueDone === true)).toBe(true);
     expect(orch.isRunning).toBe(false);
+  });
+
+  it('catches loop rejection and calls stop()', async () => {
+    const cache = new SqliteCache(':memory:');
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    // Make buildQueue throw so the loop promise rejects
+    const callbacks = {
+      broadcast: () => {},
+      getAnalyzedFiles: () => { throw new Error('simulated failure'); },
+    };
+    const orch = new QualityOrchestrator(makeConfig({ repos: ['/repo'] }), cache, callbacks);
+
+    orch.start();
+    const internals = asInternals(orch);
+    if (internals.loopPromise) await internals.loopPromise.catch(() => {});
+
+    expect(errSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Fatal loop error'),
+      expect.any(Error),
+    );
+    expect(orch.isRunning).toBe(false);
+    errSpy.mockRestore();
   });
 });
 
@@ -410,9 +477,191 @@ describe('QualityOrchestrator private helpers', () => {
     expect(broadcasts.some(b => b.type === 'queue_progress' && b.queueDone === true)).toBe(true);
   });
 
+  it('getOverallRating returns 10 on cache error', () => {
+    const { orch, cache } = makeOrchestrator();
+    jest.spyOn(cache, 'getAll').mockImplementation(() => { throw new Error('db error'); });
+    expect(asInternals(orch).getOverallRating()).toBe(10);
+  });
+
+  it('getTotalFiles returns 0 on cache error', () => {
+    const { orch, cache } = makeOrchestrator();
+    jest.spyOn(cache, 'getAll').mockImplementation(() => { throw new Error('db error'); });
+    expect(asInternals(orch).getTotalFiles()).toBe(0);
+  });
+
+  it('cleanup releases locks for active workers', () => {
+    const { orch } = makeOrchestrator();
+    const internals = asInternals(orch);
+    const fakeTimeout = setTimeout(() => {}, 1_000_000);
+    internals.activeWorkers.set('w1', {
+      queueId: 1,
+      filePath: '/repo/x.ts',
+      promise: Promise.resolve(),
+      startTime: Date.now(),
+      timeout: fakeTimeout,
+    });
+    internals.cleanup();
+    expect(internals.activeWorkers.size).toBe(0);
+    clearTimeout(fakeTimeout);
+  });
+
   it('cleanup clears timers and locks (callable directly)', () => {
     const { orch } = makeOrchestrator();
     expect(() => asInternals(orch).cleanup()).not.toThrow();
+  });
+});
+
+describe('QualityOrchestrator.getTrends() with data', () => {
+  beforeEach(() => { FixWorkerMock.mockClear(); });
+
+  it('returns mapped trend data after a worker records a trend', async () => {
+    const analyses = [{ path: '/repo/a.ts', rating: 4, repoRoot: '/repo' }];
+    const { orch } = makeOrchestrator({ repos: ['/repo'] }, analyses);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    await orch.enqueueRepos();
+    const item = orch.getQueueItems()[0];
+
+    await asInternals(orch).runWorker(item.id, item.filePath, 'w1', Date.now());
+
+    const trends = orch.getTrends();
+    expect(trends.length).toBeGreaterThan(0);
+    expect(trends[0]).toEqual(expect.objectContaining({
+      repo: expect.any(String),
+      overallRating: expect.any(Number),
+      filesTotal: expect.any(Number),
+      filesPassed: expect.any(Number),
+      filesFailed: expect.any(Number),
+      filesPending: expect.any(Number),
+      recordedAt: expect.any(Number),
+    }));
+  });
+});
+
+describe('QualityOrchestrator.getRepoSessionType()', () => {
+  it('returns "unknown" for an unregistered repo path', () => {
+    const { orch } = makeOrchestrator();
+    expect(orch.getRepoSessionType('/nonexistent')).toBe('unknown');
+  });
+
+  it('returns the stored session type for a registered repo', () => {
+    const { orch, cache } = makeOrchestrator();
+    cache.saveRepository({
+      id: 'repo-1',
+      path: '/my-repo',
+      name: 'my-repo',
+      sessionType: 'claude',
+      createdAt: Date.now(),
+    });
+    expect(orch.getRepoSessionType('/my-repo')).toBe('claude');
+  });
+
+  it('returns "unknown" when getRepositoryByPath throws', () => {
+    const { orch, cache } = makeOrchestrator();
+    jest.spyOn(cache, 'getRepositoryByPath').mockImplementation(() => { throw new Error('db error'); });
+    expect(orch.getRepoSessionType('/any')).toBe('unknown');
+    jest.restoreAllMocks();
+  });
+});
+
+describe('QualityOrchestrator.getCmdForItem()', () => {
+  beforeEach(() => { FixWorkerMock.mockClear(); });
+
+  it('returns null for a non-existent item', () => {
+    const { orch } = makeOrchestrator();
+    expect(orch.getCmdForItem(999)).toBeNull();
+  });
+
+  it('returns claude command for a claude-session repo item', async () => {
+    const analyses = [{ path: '/repo/a.ts', rating: 4, repoRoot: '/repo' }];
+    const { orch, cache } = makeOrchestrator({ repos: ['/repo'] }, analyses);
+    cache.saveRepository({
+      id: 'repo-claude',
+      path: '/repo',
+      name: 'repo',
+      sessionType: 'claude',
+      createdAt: Date.now(),
+    });
+    await orch.enqueueRepos();
+    const items = orch.getQueueItems();
+    const result = orch.getCmdForItem(items[0].id);
+    expect(result).not.toBeNull();
+    expect(result!.sessionType).toBe('claude');
+    expect(result!.cmd).toContain('claude');
+  });
+
+  it('returns github-copilot command for a copilot-session repo item', async () => {
+    const analyses = [{ path: '/repo/a.ts', rating: 4, repoRoot: '/repo' }];
+    const { orch, cache } = makeOrchestrator({ repos: ['/repo'] }, analyses);
+    cache.saveRepository({
+      id: 'repo-copilot',
+      path: '/repo',
+      name: 'repo',
+      sessionType: 'github-copilot',
+      createdAt: Date.now(),
+    });
+    await orch.enqueueRepos();
+    const items = orch.getQueueItems();
+    const result = orch.getCmdForItem(items[0].id);
+    expect(result).not.toBeNull();
+    expect(result!.sessionType).toBe('github-copilot');
+    expect(result!.cmd).toContain('gh copilot');
+  });
+});
+
+describe('QualityOrchestrator.executeItem() early returns', () => {
+  it('returns error for a non-existent item', async () => {
+    const { orch } = makeOrchestrator();
+    const result = await orch.executeItem(999);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('not found');
+  });
+
+  it('returns error for an item already in progress', async () => {
+    const analyses = [{ path: '/repo/a.ts', rating: 4, repoRoot: '/repo' }];
+    const { orch } = makeOrchestrator({ repos: ['/repo'] }, analyses);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    await orch.enqueueRepos();
+    const items = orch.getQueueItems();
+    asInternals(orch).queue.markInProgress(items[0].id, 'test-wid');
+    const result = await orch.executeItem(items[0].id);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('already in progress');
+  });
+
+  it('returns error when fix prompt generation fails (fetch rejects)', async () => {
+    const analyses = [{ path: '/repo/a.ts', rating: 4, repoRoot: '/repo' }];
+    const { orch } = makeOrchestrator({ repos: ['/repo'] }, analyses);
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    await orch.enqueueRepos();
+    const items = orch.getQueueItems();
+    const result = await orch.executeItem(items[0].id);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('Could not fetch analysis');
+  });
+});
+
+describe('QualityOrchestrator.resolveClaudePath()', () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+    // Restore default implementations
+    (fs.existsSync as jest.Mock).mockImplementation(jest.requireActual<typeof fs>('fs').existsSync);
+    (cp.execSync as jest.Mock).mockImplementation(jest.requireActual<typeof cp>('child_process').execSync);
+  });
+
+  it('falls back to bare "claude" when no candidate is found and which fails', () => {
+    (fs.existsSync as jest.Mock).mockReturnValue(false);
+    (cp.execSync as jest.Mock).mockImplementation(() => { throw new Error('not found'); });
+
+    const { orch } = makeOrchestrator();
+    expect(asInternals(orch).resolveClaudePath()).toBe('claude');
+  });
+
+  it('returns the first candidate path that exists on disk', () => {
+    (fs.existsSync as jest.Mock).mockImplementation((p: string) => p === '/home/mohantn/.local/bin/claude');
+    (cp.execSync as jest.Mock).mockImplementation(() => { throw new Error('not found'); });
+
+    const { orch } = makeOrchestrator();
+    expect(asInternals(orch).resolveClaudePath()).toBe('/home/mohantn/.local/bin/claude');
   });
 });
 

@@ -12,6 +12,7 @@
     "mcp": "node dist/mcp/server.js",
     "mcp:dev": "npx tsx src/mcp/server.ts",
     "setup": "bash scripts/setup.sh",
+    "setup:portable": "npm run build:all && npx tsx src/cli/setup.ts --all",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"

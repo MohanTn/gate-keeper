@@ -226,6 +226,86 @@ export function registerRoutes(app: express.Application, deps: RouteDeps): void 
     res.json(reports);
   });
 
+  /**
+   * GET /api/impact-set?file=...&repo=...&depth=2
+   *
+   * Returns the same data as the get_impact_set MCP tool — a depth-bounded BFS
+   * over reverse dependencies. Used by the PreToolUse hook to check edit safety.
+   */
+  app.get('/api/impact-set', (req, res) => {
+    const filePath = req.query['file'] as string;
+    const repo = req.query['repo'] as string;
+    const depth = Math.min(Number(req.query['depth'] ?? 2), 5);
+
+    if (!filePath || !repo) {
+      res.status(400).json({ error: 'file and repo query params required' });
+      return;
+    }
+
+    const graph = deps.graphs.get(repo);
+    if (!graph) {
+      res.json({ filePath, depth, affected: [], fragileCount: 0, riskScore: 0 });
+      return;
+    }
+
+    const gd = graph.toGraphData();
+    const revAdj = new Map<string, string[]>();
+    for (const e of gd.edges) {
+      const sources = revAdj.get(e.target) ?? [];
+      sources.push(e.source);
+      revAdj.set(e.target, sources);
+    }
+
+    const ratings = new Map(gd.nodes.map(n => [n.id, n.rating]));
+    const fileNode = gd.nodes.find(n => n.id === filePath);
+
+    // BFS over reverse adjacency
+    const visited = new Set<string>();
+    const queue: Array<{ id: string; d: number }> = [{ id: filePath, d: 0 }];
+    const affected: Array<{ path: string; depth: number; severity: string; rating: number; fragile: boolean }> = [];
+
+    while (queue.length > 0) {
+      const { id, d } = queue.shift()!;
+      if (d > depth) continue;
+      if (id !== filePath) {
+        const r = ratings.get(id) ?? 10;
+        affected.push({
+          path: id, depth: d,
+          severity: d === 1 ? 'direct' : 'indirect',
+          rating: r, fragile: r < 6,
+        });
+      }
+      for (const dependent of revAdj.get(id) ?? []) {
+        if (!visited.has(dependent) && dependent !== filePath) {
+          visited.add(dependent);
+          if (d < depth) queue.push({ id: dependent, d: d + 1 });
+        }
+      }
+    }
+
+    const fragileCount = affected.filter(e => e.fragile).length;
+    const riskScore = fragileCount >= 3 ? 10 : fragileCount >= 1 ? 5 : 0;
+    const verdict = fragileCount >= 3 ? 'block' : fragileCount >= 1 ? 'warn' : 'safe';
+
+    const fileRating = fileNode?.rating ?? null;
+    const directDepCount = affected.filter(e => e.severity === 'direct').length;
+
+    res.json({
+      filePath, depth,
+      affected,
+      fragileCount,
+      directDependents: directDepCount,
+      riskScore,
+      verdict,
+      fileRating,
+      reason: verdict === 'block'
+        ? `${fragileCount} fragile dependents — high risk of cascading failures`
+        : verdict === 'warn'
+          ? `${fragileCount} fragile dependent(s) — verify after change`
+          : 'Low blast radius',
+    });
+  });
+
   // Get architecture config for a repo
   app.get('/api/arch', (req, res) => {
     const repo = req.query['repo'] as string | undefined;

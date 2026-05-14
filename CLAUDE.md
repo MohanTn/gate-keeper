@@ -4,157 +4,228 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Quality Checks:** @.github/instructions/gate-keeper-quality-check.instructions.md
 
+---
+
 ## Commands
 
 ```bash
-# First-time setup (installs deps + builds everything)
-bash scripts/setup.sh
+# Build & Install
+bash scripts/setup.sh               # First-time: install deps + build everything
+npm run build                       # TypeScript only (src/ → dist/)
+npm run build:dashboard             # Dashboard only (dashboard/src/ → dashboard/dist/)
+npm run build:all                   # Build everything
 
-# Build TypeScript only (src/ → dist/)
-npm run build
+# Run daemon
+npm run daemon                      # node dist/daemon.js
+npm run dev                         # npx tsx src/daemon.ts (no build step needed)
+npm run dev -- --watch              # Watch mode: polls for file changes, auto re-analyzes
+npm run dev -- --query              # Interactive graph query REPL
+npm run dev -- --quality-loop       # Start quality loop auto-fixer
 
-# Build dashboard only (dashboard/src/ → dashboard/dist/)
-npm run build:dashboard
+# MCP server
+npm run mcp                         # node dist/mcp/server.js
+npm run mcp:dev                     # npx tsx src/mcp/server.ts
 
-# Build everything
-npm run build:all
+# Setup (one-shot plugin installation)
+npx tsx src/cli/setup.ts --all      # hooks + VS Code + git hooks + CI + daemon
+npx tsx src/cli/setup.ts --claude   # Claude Code hooks only
+npx tsx src/cli/setup.ts --copilot  # .vscode/mcp.json for VS Code
 
-# Run daemon (after building)
-npm run daemon                    # node dist/daemon.js
+# Tests
+npm test                            # Run all tests (967 across 37 suites)
+npm run test:watch                  # Watch mode
+npm run test:coverage               # With coverage report
 
-# Run daemon in dev mode (no build step needed)
-npm run dev                       # npx tsx src/daemon.ts
+# Test MCP server manually
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | node dist/mcp/server.js | python3 -m json.tool
 
-# Run the MCP server (after building)
-npm run mcp                       # node dist/mcp/server.js
-
-# Run the MCP server in dev mode
-npm run mcp:dev                   # npx tsx src/mcp/server.ts
-
-# Test the MCP server (send JSON-RPC initialize)
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | node dist/mcp/server.js
-
-# Test the hook receiver manually
+# Test hook receiver
 echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/file.ts"}}' | node dist/hook-receiver.js
 
-# Test the analyzer directly (Node REPL)
+# Test analyzer
 node -e "
 const { UniversalAnalyzer } = require('./dist/analyzer/universal-analyzer');
 new UniversalAnalyzer().analyze('/your/file.ts').then(r => console.log(JSON.stringify(r, null, 2)));
 "
 ```
 
-## Test Suite
+---
 
-The project uses **Jest** with **ts-jest** preset for TypeScript support.
+## MCP Server — 27 Tools
 
-### Test Commands
+### Tier 1 — File Quality
+- `analyze_file` — file on disk → rating, violations, metrics
+- `analyze_code` — code string in memory (before writing)
+- `analyze_many` — batch files, returns topologically sorted fix order
+- `get_codebase_health` — scan directory: avg rating, worst files, common issues
+- `get_quality_rules` — all rules, thresholds, scoring deductions
 
-```bash
-# Run all tests
-npm test
+### Tier 2 — Graph Context & Dependencies
+- `get_dependency_graph` — full graph: nodes, edges, coupling hotspots, cycles
+- `get_file_context` — deps, reverse deps, cycles, rating breakdown, trend
+- `get_impact_analysis` — direct + transitive dependents, at-risk files
+- `suggest_refactoring` — ranked refactoring hints for a file
+- `predict_impact_with_remediation` — blast radius + fix instructions for at-risk files
+- `get_violation_patterns` — ranked violation table across the codebase
 
-# Run tests in watch mode (re-run on file changes)
-npm run test:watch
+### Tier 3 — Token-Efficient Graph Queries
+Replaces reading raw files (~5000 tokens each) with compact structured queries (~100–300 tokens).
 
-# Run tests with coverage report
-npm run test:coverage
-```
+- `get_impact_set(file_path, depth=2)` — BFS over dependent chain, fragility flags
+- `summarize_file(file_path)` — rating, imports, dependents, violations (no raw content)
+- `find_callers(symbol_name)` — call sites across all analyzed files
+- `trace_path(source, target)` — shortest dependency path between two files
+- `check_pre_edit_safety(file_path)` — safe / warn / block verdict before any edit
+- `get_centrality_rank(limit=10)` — most connected files (god nodes), highest blast radius
 
-### Test Structure
+### Tier 4 — Knowledge Graph Intelligence
+- `get_graph_report(repo?)` — narrative: god nodes, surprising connections, suggested questions
+- `query_graph(query)` — NL: "what connects X to Y?", "explain Z", "god nodes"
+- `explain_node(file_path)` — deep role: centrality rank, impact set, surprising connections
+- `export_graph(format, repo?)` — JSON (graphify-compatible), GraphML, Neo4j, SVG
+- `merge_graphs(repo_a, repo_b)` — union-merge with min-rating conflict resolution
+- `get_graph_viz(repo?, output_path?)` — writes standalone interactive HTML to disk
 
-- **Test files:** `src/**/*.test.ts` or `src/**/*.spec.ts`
-- **Configuration:** `jest.config.js` (Node environment, ts-jest transformer)
-- **Coverage:** Collected from `src/**/*.{ts,tsx}`, excludes `.d.ts` files
-- **Dashboard tests:** Separate Jest config in `dashboard/jest.config.js`
+### Tier 5 — Platform & Workflow
+- `install_platform(platform)` — write config: claude-code, copilot, cursor, vscode, github-action
+- `install_git_hooks(repo?)` — post-commit + post-checkout + merge driver
+- `pr_review(changed_files?)` — GREEN/YELLOW/RED per-file risk
+- `get_session_metrics()` — cumulative token savings (~84% reduction vs naive reads)
 
-### Coverage Reports
-
-Coverage reports are generated in multiple formats:
-- `text` and `text-summary` — console output
-- `lcov` — detailed coverage data
-- `cobertura` — XML format for CI integration
-
-View the coverage summary after running `npm run test:coverage`.
+---
 
 ## Architecture
 
-Gate Keeper runs as two persistent layers plus a React dashboard.
+### Process model
 
-### Two-process design
+Two entry points plus the daemon:
 
-**`src/hook-receiver.ts`** — called on every `PostToolUse` (Write/Edit) event by the Claude Code global hook in `~/.claude/settings.json`. It **must exit in under 100ms**: it checks for `.ts/.tsx/.jsx/.js/.cs` extensions, auto-starts the daemon if the PID file (`~/.gate-keeper/daemon.pid`) shows it's dead, then fires a `POST /analyze` to the daemon and returns immediately. It never does analysis itself.
+| File | Role | Exit constraint |
+|------|------|-----------------|
+| `src/hook-receiver.ts` | PostToolUse + SessionStart hook | < 100 ms, exit code 2 = block |
+| `src/hook-pre-tool-use.ts` | PreToolUse hook (blocks risky edits) | < 100 ms, exit code 2 = block |
+| `src/daemon.ts` | Long-lived: analyzer + graph + dashboard | Binds 5378/5379 |
 
-**`src/daemon.ts`** — long-lived Node process. Binds two ports:
-- `:5379` (localhost only) — HTTP IPC, receives `/analyze` requests from the hook-receiver
-- `:5378` — public Express + WebSocket server that serves the dashboard and broadcasts real-time updates
+### Key modules
 
-### Analysis pipeline
+| Module | Purpose |
+|--------|---------|
+| `analyzer/typescript-analyzer.ts` | TS Compiler API AST analysis |
+| `analyzer/csharp-analyzer.ts` | C# text/regex analysis |
+| `analyzer/universal-analyzer.ts` | Language dispatcher |
+| `rating/rating-calculator.ts` | 0–10 scoring (10.0 − deductions) |
+| `cache/sqlite-cache.ts` | SQLite persistence |
+| `graph/dependency-graph.ts` | In-memory graph + DFS cycle detection |
+| `graph/graph-algorithms.ts` | BFS impact sets, degree + betweenness centrality, path tracing, token estimates |
+| `graph/relationship-extractor.ts` | AST extraction: FUNCTION_CALL, CLASS_EXTENDS, IMPLEMENTS, why-comments |
+| `graph/surprising-connections.ts` | Cross-module coupling ranking |
+| `graph/question-suggester.ts` | Auto-generated questions from topology |
+| `graph/graph-report.ts` | Narrative Markdown report generator |
+| `graph/graph-export.ts` | JSON / GraphML / Neo4j / SVG export + merge function |
+| `graph/graphify-ignore.ts` | .graphifyignore parser (gitignore-compatible) |
+| `graph/global-graph.ts` | Cross-repo index (~/.gate-keeper/global-graph.json) |
+| `mcp/server.ts` | MCP server, 27 tool definitions, JSON-RPC over stdio |
+| `mcp/handlers/graph-query.ts` | 7 token-efficient query handlers |
+| `mcp/handlers/graph-intelligence.ts` | 6 knowledge graph + viz handlers |
+| `mcp/handlers/platform-installer.ts` | install_platform + install_git_hooks |
+| `mcp/handlers/pr-review.ts` | PR risk assessment (GREEN/YELLOW/RED) |
+| `mcp/token-tracker.ts` | Session token savings accumulator |
+| `mcp/installer.ts` | Platform config generators (pure logic) |
+| `mcp/cache-preload.ts` | Preloads graph data on MCP session start |
+| `viz/viz-server.ts` | Express + WebSocket server |
+| `viz/viz-routes.ts` | REST API routes including /api/impact-set |
+| `viz/viz-scanner.ts` | File system scanner with .graphifyignore support |
+| `viz/graph-viz.ts` | Standalone HTML force-directed visualizer (no CDN) |
+| `daemon/watch-mode.ts` | fs.watchFile polling (WSL-safe) |
+| `cli/setup.ts` / `cli/setup-core.ts` | One-shot plugin installer |
+| `cli/query-repl.ts` | Interactive graph query REPL |
+| `github/commenter.ts` | PR comment formatter |
+| `github/app.ts` | GitHub App webhook skeleton |
+| `hooks/git-hooks.ts` | Git hook script generators |
 
-Each file write triggers: `UniversalAnalyzer` → language dispatch → `TypeScriptAnalyzer` or `CSharpAnalyzer` → `RatingCalculator` → `SqliteCache.save()` → `VizServer.pushAnalysis()` → WebSocket broadcast.
+### Data flow
 
-- **`TypeScriptAnalyzer`** uses the TypeScript Compiler API (`ts.createSourceFile`) for accurate AST-based detection. Detects: hook count per component, missing `key` props in `.map()`, inline JSX handlers, `any` usage, `console.log`.
-- **`CSharpAnalyzer`** uses text/regex analysis (Roslyn via `dotnet` CLI if available). Detects: God Class (>20 methods), long methods (>50 lines), tight coupling (>5 constructor params), empty catch blocks.
-- **`RatingCalculator`** starts at 10.0, deducts: error −1.5, warning −0.5, info −0.1, complexity >20 −2, imports >30 −2, LOC >500 −1.5. Circular deps apply a separate −1.0 per cycle.
-
-### Dependency graph & cycle detection
-
-`DependencyGraph` maintains an in-memory map of all analyzed `FileAnalysis` objects. `detectCycles()` uses iterative DFS with a visited/stack set. Only edges where both source and target are known files are included (external npm imports are tracked but not graphed). `VizServer` loads the cache on startup so the graph survives daemon restarts.
-
-### Dashboard
-
-`dashboard/` is a standalone Vite + React app. It connects via WebSocket to `:5378`, receives `init` (full graph) on connect and `update` (delta) on each new analysis. Node shapes encode language: circle = TS/JS, square = C#, triangle = TSX/JSX. Node color encodes rating: green ≥8, yellow ≥6, orange ≥4, red <4. The dashboard auto-opens in the browser when overall rating drops below 5.0.
-
-### Persistence
-
-`SqliteCache` writes to `~/.gate-keeper/cache.db`. It stores the full `FileAnalysis` JSON plus a `rating_history` table for trend data. The `VizServer` pre-loads all cached analyses on daemon startup.
-
-### Ports & files
-
-| Port / Path | Purpose |
-|---|---|
-| `:5378` | Dashboard WebSocket + static files |
-| `:5379` | Daemon IPC (localhost only) |
-| `~/.gate-keeper/cache.db` | SQLite analysis cache |
-| `~/.gate-keeper/daemon.pid` | PID file — hook-receiver uses this to check daemon liveness |
-| `dashboard/dist/` | Built dashboard, served at `/viz/` |
-
-### MCP Server (`src/mcp/server.ts`)
-
-Exposes Gate Keeper as an MCP (Model Context Protocol) server over stdio. AI agents (GitHub Copilot, Claude, etc.) call these tools during editing to get real-time quality feedback and self-correct.
-
-**Tools:**
-
-| Tool | Purpose |
-|---|---|
-| `analyze_file` | Analyze a file on disk → rating, violations, metrics |
-| `analyze_code` | Analyze a code string in-memory → rating, violations |
-| `get_codebase_health` | Scan a directory → overall rating, worst files, common issues |
-| `get_quality_rules` | List all rules, thresholds, and scoring deductions |
-
-**Agent workflow:**
-1. Agent edits a file
-2. Agent calls `analyze_file` on the edited file
-3. Gate Keeper returns rating + violations
-4. If rating < threshold → agent fixes violations and re-analyzes
-5. Repeat until rating ≥ threshold
-
-**Key files:**
-- `src/mcp/server.ts` — MCP server, JSON-RPC over stdio, tool handlers
-- `src/analyzer/string-analyzer.ts` — In-memory AST analysis (no disk I/O)
-- `src/analyzer/universal-analyzer.ts` — File-based analysis dispatcher
-
-**VS Code setup (`.vscode/mcp.json`):**
-```json
-{
-  "servers": {
-    "gate-keeper": {
-      "command": "node",
-      "args": ["dist/mcp/server.js"],
-      "cwd": "/path/to/gate-keeper"
-    }
-  }
-}
+```
+hook-receiver (stdin JSON)               hook-pre-tool-use (stdin JSON)
+    │                                         │
+    │ POST /analyze (:5379)                   │ GET /api/impact-set (:5378)
+    ▼                                         ▼
+┌──────────────────────────────┐
+│          daemon              │
+│  UniversalAnalyzer.analyze() │
+│  → RatingCalculator          │
+│  → SqliteCache.save()        │
+│  → DependencyGraph.upsert()  │
+│  → VizServer.pushAnalysis()  │
+│  → WebSocket broadcast       │
+└──────────────────────────────┘
 ```
 
-**Configuration:** Edit `~/.gate-keeper/config.json` to change `minRating` (default 6.5).
+---
+
+## Key design decisions
+
+- **Two-process split**: hook-receiver exits in < 100ms (exit code 2 = block). Daemon does async work.
+- **PreToolUse gate**: blocks edits before they happen if 3+ fragile dependents.
+- **AST-level analysis**: TypeScript Compiler API (`ts.createSourceFile`), not regex heuristics.
+- **MCP over stdio**: zero network setup for AI agents. Any MCP-compatible client connects instantly.
+- **`getModule()` skips `src/lib/app` prefixes**: surprising connections detect domain boundaries, not filesystem conventions.
+- **`mergeGraphs` takes minimum rating on conflict**: conservative — contested quality means the worse estimate wins.
+- **Watch mode uses `fs.watchFile` (stat-polling)**: same pattern as existing LCOV watcher — WSL-safe.
+- **`.graphifyignore` anchored semantics**: trailing slash `src/` = directory marker, matched against repo-relative path.
+
+---
+
+## Test suite
+
+- **Framework**: Jest with ts-jest preset
+- **Config**: `jest.config.js` (Node environment)
+- **Location**: `src/**/*.test.ts`
+- **Dashboard tests**: separate `dashboard/jest.config.js`
+
+### Coverage goals
+
+| Module | Current | Target |
+|--------|---------|--------|
+| `src/graph/` | ~96% | ≥ 90% |
+| `src/hooks/` | 100% | 100% |
+| `src/viz/` | ~86% | ≥ 80% |
+| `src/analyzer/` | ~91% | ≥ 90% |
+
+### When adding a new MCP tool
+
+1. Add handler function in `src/mcp/handlers/` (prefer pure logic separate from I/O)
+2. Add tool definition in `src/mcp/server.ts` TOOLS array
+3. Wire route in `src/mcp/handlers/index.ts`
+4. Test: add `*.test.ts` for pure logic + update `server.protocol.test.ts` tool count
+5. Update README.md tool listing
+
+### When adding a new graph algorithm
+
+1. Add to `src/graph/` as a pure function (no I/O dependencies)
+2. Write unit tests with inline fixture data
+3. If exposing via MCP: create handler in `src/mcp/handlers/graph-query.ts` or `graph-intelligence.ts`
+
+---
+
+## Quality workflow (dogfooding)
+
+1. Existing files: `get_file_context` → edit → `analyze_file` (target ≥ 7.0)
+2. New files: `analyze_code` before writing, `analyze_file` after
+3. Widely imported: `get_impact_set` before editing, check for fragile dependents
+4. After bulk changes (3+): `get_codebase_health`
+5. Use `check_pre_edit_safety` as the gate before every edit
+
+---
+
+## Ports & files
+
+| Resource | Purpose |
+|----------|---------|
+| `:5378` | Dashboard HTTP + WebSocket |
+| `:5379` | Daemon IPC (localhost only) |
+| `~/.gate-keeper/cache.db` | SQLite — analyses, rating history, repos |
+| `~/.gate-keeper/config.json` | minRating threshold (default 6.5) |
+| `~/.gate-keeper/daemon.pid` | PID file for liveness checks |
+| `~/.gate-keeper/global-graph.json` | Cross-repo merged graph index |
+| `dashboard/dist/` | Built React app, served at `/viz/` |
