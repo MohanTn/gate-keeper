@@ -4,25 +4,17 @@
  * Listens for push and pull_request webhooks from GitHub, runs graph analysis
  * on changed files, and posts comments with impact data.
  *
- * This is a minimal Express app — configure it via:
+ * Configure via:
  *   EXPOSE_GITHUB_APP=true GK_WEBHOOK_SECRET=<secret> npx tsx src/github/app.ts
- *
- * For full setup:
- *   1. Register a GitHub App at https://github.com/settings/apps
- *   2. Set Webhook URL to http://your-server:5432/webhook
- *   3. Grant push + pull_request events
- *   4. Set EXPOSE_GITHUB_APP=true and GK_WEBHOOK_SECRET
- *   5. Set GITHUB_TOKEN=<app-installation-token>
  */
 
 import express from 'express';
 import * as crypto from 'crypto';
 import * as http from 'http';
-import { formatPRComment, PRFile, GraphNodeSummary } from './commenter';
+import { formatPRComment, GraphNodeSummary } from './commenter';
 
 const PORT = parseInt(process.env['GK_GH_PORT'] ?? '5432', 10);
 const WEBHOOK_SECRET = process.env['GK_WEBHOOK_SECRET'] ?? '';
-const GITHUB_TOKEN = process.env['GITHUB_TOKEN'] ?? '';
 const DAEMON_PORT = 5378;
 
 // ── Helpers ────────────────────────────────────────────────
@@ -41,8 +33,8 @@ function fetchDaemonApi(urlPath: string): Promise<unknown> {
   });
 }
 
-function verifySignature(payload: string, signature: string | undefined): boolean {
-  if (!WEBHOOK_SECRET) return true; // no secret = no verification
+export function verifySignature(payload: string, signature: string | undefined): boolean {
+  if (!WEBHOOK_SECRET) return true;
   if (!signature) return false;
   const sig = `sha256=${crypto.createHmac('sha256', WEBHOOK_SECRET).update(payload).digest('hex')}`;
   try {
@@ -52,40 +44,17 @@ function verifySignature(payload: string, signature: string | undefined): boolea
   }
 }
 
-function getRepoFullName(payload: Record<string, unknown>): string | null {
+export function getRepoFullName(payload: Record<string, unknown>): string | null {
   const repo = payload['repository'] as Record<string, unknown> | undefined;
-  return repo ? `${repo['owner']}/${repo['name']}` as string : null;
+  return repo ? `${repo['owner']}/${repo['name']}` : null;
 }
 
-function getRepoPath(payload: Record<string, unknown>): string | null {
-  const repo = payload['repository'] as Record<string, unknown> | undefined;
-  const cloneUrl = repo?.['clone_url'] as string | undefined;
-  if (cloneUrl) return cloneUrl;
-  return getRepoFullName(payload);
-}
+type GraphNode = { id: string; label: string; rating: number; violations: Array<{ severity: string }> };
+type GraphEdge = { source: string; target: string };
+type GraphData = { nodes: GraphNode[]; edges: GraphEdge[] };
 
-// ── Webhook handler ───────────────────────────────────────
-
-async function handlePush(payload: Record<string, unknown>): Promise<void> {
-  const repoName = getRepoFullName(payload);
-  const commits = (payload['commits'] ?? []) as Array<{ modified?: string[]; added?: string[]; removed?: string[] }>;
-  const allFiles = new Set<string>();
-  for (const c of commits) {
-    for (const f of c.modified ?? []) allFiles.add(f);
-    for (const f of c.added ?? []) allFiles.add(f);
-  }
-  if (allFiles.size === 0 || !repoName) return;
-
-  // Fetch graph data from the local daemon
-  const graphRaw = await fetchDaemonApi(`/api/graph`);
-  if (!graphRaw) return;
-
-  const graph = graphRaw as { nodes: Array<{ id: string; label: string; rating: number; violations: Array<{ severity: string }> }>; edges: Array<{ source: string; target: string }> };
-
-  // Build summaries for each pushed file
+export function buildPushSummaries(allFiles: Set<string>, graph: GraphData): GraphNodeSummary[] {
   const summaries: GraphNodeSummary[] = [];
-  const filePaths = new Set(graph.nodes.map(n => n.id));
-
   for (const file of allFiles) {
     const node = graph.nodes.find(n => n.id.endsWith(file));
     if (!node) continue;
@@ -100,20 +69,54 @@ async function handlePush(payload: Record<string, unknown>): Promise<void> {
       warnings: node.violations.filter(v => v.severity === 'warning').length,
     });
   }
+  return summaries;
+}
 
+// ── Webhook handlers ──────────────────────────────────────
+
+async function handlePush(payload: Record<string, unknown>): Promise<void> {
+  const repoName = getRepoFullName(payload);
+  const commits = (payload['commits'] ?? []) as Array<{ modified?: string[]; added?: string[]; removed?: string[] }>;
+  const allFiles = new Set<string>();
+  for (const c of commits) {
+    for (const f of c.modified ?? []) allFiles.add(f);
+    for (const f of c.added ?? []) allFiles.add(f);
+  }
+  if (allFiles.size === 0 || !repoName) return;
+
+  const graphRaw = await fetchDaemonApi(`/api/graph`);
+  if (!graphRaw) return;
+
+  const summaries = buildPushSummaries(allFiles, graphRaw as GraphData);
   if (summaries.length === 0) return;
 
-  // Format the comment (we don't auto-post — the caller provides transport)
+  const ref = (payload['ref'] as string) ?? 'unknown';
   const pr = {
-    number: 0, title: `Push to ${(payload['ref'] as string) ?? 'unknown'}`,
+    number: 0,
+    title: `Push to ${ref}`,
     author: (payload['pusher'] as Record<string, string>)?.['name'] ?? 'unknown',
-    baseBranch: (payload['ref'] as string)?.replace('refs/heads/', '') ?? '',
-    headBranch: (payload['ref'] as string)?.replace('refs/heads/', '') ?? '',
+    baseBranch: ref.replace('refs/heads/', ''),
+    headBranch: ref.replace('refs/heads/', ''),
   };
-  const comment = formatPRComment(pr, summaries, repoName, graph.nodes.length);
-  console.error(`[gate-keeper-github] Push analysis: ${summaries.length} files changed, verdict=${comment.verdict}`);
+  const comment = formatPRComment(pr, summaries, repoName, (graphRaw as GraphData).nodes.length);
+  process.stderr.write(`[gate-keeper-github] Push analysis: ${summaries.length} files changed, verdict=${comment.verdict}\n`);
   for (const s of summaries) {
-    console.error(`[gate-keeper-github]   ${s.path}: ${s.rating}/10, ${s.fragileDependents} fragile`);
+    process.stderr.write(`[gate-keeper-github]   ${s.path}: ${s.rating}/10, ${s.fragileDependents} fragile\n`);
+  }
+}
+
+function handlePullRequest(payload: Record<string, unknown>): void {
+  const action = payload['action'] as string;
+  if (action === 'opened' || action === 'synchronize') {
+    process.stderr.write(`[gate-keeper-github] PR ${payload['number']} ${action} — analysis triggered\n`);
+  }
+}
+
+async function dispatchWebhookEvent(event: string, payload: Record<string, unknown>): Promise<void> {
+  if (event === 'push') {
+    await handlePush(payload);
+  } else if (event === 'pull_request') {
+    handlePullRequest(payload);
   }
 }
 
@@ -139,19 +142,9 @@ export function startGitHubApp(): void {
     res.status(202).json({ ok: true });
 
     try {
-      const payload = req.body as Record<string, unknown>;
-      if (event === 'push') {
-        await handlePush(payload).catch(err => {
-          console.error(`[gate-keeper-github] Push handler error: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      } else if (event === 'pull_request') {
-        const action = payload['action'] as string;
-        if (action === 'opened' || action === 'synchronize') {
-          console.error(`[gate-keeper-github] PR ${payload['number']} ${action} — analysis triggered`);
-        }
-      }
+      await dispatchWebhookEvent(event, req.body as Record<string, unknown>);
     } catch (err) {
-      console.error(`[gate-keeper-github] Webhook error: ${err instanceof Error ? err.message : String(err)}`);
+      process.stderr.write(`[gate-keeper-github] Webhook error: ${err instanceof Error ? err.message : String(err)}\n`);
     }
   });
 
@@ -160,13 +153,13 @@ export function startGitHubApp(): void {
   });
 
   app.listen(PORT, () => {
-    console.error(`[gate-keeper-github] Webhook server on :${PORT} (secret: ${WEBHOOK_SECRET ? 'set' : 'NOT SET'})`);
+    process.stderr.write(`[gate-keeper-github] Webhook server on :${PORT} (secret: ${WEBHOOK_SECRET ? 'set' : 'NOT SET'})\n`);
   });
 }
 
 if (require.main === module) {
   if (!process.env['EXPOSE_GITHUB_APP']) {
-    console.error('Set EXPOSE_GITHUB_APP=true to start the GitHub App webhook server.');
+    process.stderr.write('Set EXPOSE_GITHUB_APP=true to start the GitHub App webhook server.\n');
     process.exit(0);
   }
   startGitHubApp();

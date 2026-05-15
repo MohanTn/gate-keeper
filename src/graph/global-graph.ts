@@ -101,10 +101,11 @@ export function indexRepo(
     type: e.type,
   }));
 
-  // Union-merge with existing global
+  // Union-merge with existing global; GNode/GEdge have optional fields so
+  // the narrower global types are structurally compatible with the expected shape.
   const merged = mergeGraphs(
-    { nodes: global.nodes as any, edges: global.edges as any },
-    { nodes: prefixedNodes as any, edges: prefixedEdges as any },
+    { nodes: global.nodes, edges: global.edges },
+    { nodes: prefixedNodes, edges: prefixedEdges },
   );
 
   global.nodes = merged.nodes;

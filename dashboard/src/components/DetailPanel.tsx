@@ -2,6 +2,11 @@ import React, { useCallback, useEffect, useMemo, useState, memo } from 'react';
 import { GraphData, GraphNode, FileDetailResponse } from '../types';
 import { ThemeTokens, useTheme, ratingColor, healthLabel } from '../ThemeContext';
 
+function toFixStr(fix: unknown): string | undefined {
+  if (fix == null) return undefined;
+  return typeof fix === 'string' ? fix : (fix as { description: string }).description;
+}
+
 // ── Props ──────────────────────────────────────────────────
 interface DetailPanelProps {
   node: GraphNode;
@@ -177,7 +182,7 @@ export function DetailPanel({ node, graphData, onClose, onNodeSelect, selectedRe
                     <span style={{ fontSize: 13, color: T.text, lineHeight: 1.4 }}>{v.message}</span>
                   </div>
                   {v.line != null && <div style={{ fontSize: 11, color: T.textDim, marginTop: 3, marginLeft: 13 }}>Line {v.line}</div>}
-                  {v.fix && <div style={{ fontSize: 11, color: T.green, marginTop: 3, marginLeft: 13, fontStyle: 'italic' }}>Fix: {v.fix}</div>}
+                  {v.fix && <div style={{ fontSize: 11, color: T.green, marginTop: 3, marginLeft: 13, fontStyle: 'italic' }}>Fix: {toFixStr(v.fix)}</div>}
                 </div>
               ))}
             </div>
@@ -372,7 +377,7 @@ function CopyButton({ node }: { node: GraphNode }) {
     node.violations.forEach((v, i) => {
       lines.push(`${i + 1}. [${v.severity.toUpperCase()}] ${v.message}`);
       if (v.line) lines.push(`   Line: ${v.line}`);
-      if (v.fix) lines.push(`   Fix: ${v.fix}`);
+      if (v.fix) lines.push(`   Fix: ${toFixStr(v.fix)}`);
       lines.push('');
     });
     navigator.clipboard.writeText(lines.join('\n')).then(() => {

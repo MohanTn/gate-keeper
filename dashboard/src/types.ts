@@ -24,7 +24,6 @@ export interface GraphNode {
   size: number;
   violations: Violation[];
   metrics: Metrics;
-  layer?: string;
   // force-graph runtime fields
   x?: number;
   y?: number;

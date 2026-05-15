@@ -1,22 +1,28 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { AppHeader } from './components/AppHeader';
 import { ScanProgressBar } from './components/HeaderWidgets';
+import { ThemeTokens } from './ThemeContext';
 import { AppContent, RepoOverlay } from './components/AppContent';
 import { QualityDashboard } from './components/QualityDashboard';
 import { GraphErrorBoundary } from './components/ErrorBoundary';
 import { useTheme } from './ThemeContext';
-import { useRepoSelection, useNodeHandlers, useSearchUI, usePanelActions, useGraphData, useAppMetrics } from './hooks';
+import { useAppState } from './hooks/useAppState';
 
 export default function App() {
     const { T } = useTheme();
-    const [view, setView] = useState<'graph' | 'quality'>('graph');
-    const { repos, selectedRepo, showRepoSelector, setShowRepoSelector, handleRepoSelect, handleRepoDelete, refreshRepos } = useRepoSelection();
-    const { graphData, filteredGraphData, patterns, addPattern, removePattern, scanExcludePatterns, wsStatus, scanProgress, scanning, setScanning, lastScan, setLastScan, handleScanAll, repoLoading } = useGraphData(selectedRepo, refreshRepos);
-    const { selectedNode, handleClearSelection, handleNodeSelect } = useNodeHandlers(filteredGraphData);
-    const { searchQuery, searchRef, searchResults, showSearchDropdown, handleSearchSelect, handleSearchChange, handleSearchFocus, handleSearchBlur, handleSearchKeyDown } = useSearchUI(filteredGraphData.nodes, handleNodeSelect);
-    const { showFileList, showFilterPanel, showViolationsPanel, handleShowRepoSelector, handleFileListOpen, handleFileListSelect, handleFileListClose, handleToggleFilterPanel, handleCloseFilterPanel, handleToggleViolationsPanel, handleCloseViolationsPanel, handleClear } = usePanelActions(handleClearSelection, handleNodeSelect, setShowRepoSelector, filteredGraphData, setScanning, setLastScan, selectedRepo, repos);
-
-    const { totalViolations, overallRating, currentRepoLabel, scanPct } = useAppMetrics(filteredGraphData, selectedRepo, repos, scanProgress);
+    const {
+        view, setView, repos, selectedRepo, showRepoSelector, setShowRepoSelector,
+        handleRepoSelect, handleRepoDelete, refreshRepos,
+        graphData, filteredGraphData, patterns, addPattern, removePattern, scanExcludePatterns,
+        wsStatus, scanProgress, scanning, setScanning, lastScan, setLastScan, handleScanAll, repoLoading,
+        selectedNode, handleClearSelection, handleNodeSelect,
+        searchQuery, searchRef, searchResults, showSearchDropdown,
+        handleSearchSelect, handleSearchChange, handleSearchFocus, handleSearchBlur, handleSearchKeyDown,
+        showFileList, showFilterPanel, showViolationsPanel,
+        handleShowRepoSelector, handleFileListOpen, handleFileListSelect, handleFileListClose,
+        handleToggleFilterPanel, handleCloseFilterPanel, handleToggleViolationsPanel, handleCloseViolationsPanel,
+        handleClear, totalViolations, overallRating, currentRepoLabel, scanPct,
+    } = useAppState();
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", sans-serif' }}>
@@ -63,7 +69,7 @@ export default function App() {
     );
 }
 
-function TabButton({ label, active, onClick, T }: { label: string; active: boolean; onClick: () => void; T: any }) {
+function TabButton({ label, active, onClick, T }: { label: string; active: boolean; onClick: () => void; T: ThemeTokens }) {
     return (
         <button
             onClick={onClick}

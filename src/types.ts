@@ -1,25 +1,5 @@
 export type Language = 'csharp' | 'typescript' | 'tsx' | 'jsx';
 
-export interface ArchLayerDef {
-  id: string;
-  label: string;
-  color: string;
-  order: number;
-}
-
-export interface ArchConnection {
-  from: string;
-  to: string;
-}
-
-export interface ArchMapping {
-  version: string;
-  layers: ArchLayerDef[];
-  connections?: ArchConnection[];
-  files: Record<string, string>;      // path → layerId (auto-detected)
-  overrides: Record<string, string>;  // path → layerId (user-set, never overwritten)
-}
-
 export interface Dependency {
   source: string;
   target: string;
@@ -69,7 +49,6 @@ export interface FileAnalysis {
   analyzedAt: number;
   repoRoot?: string;
   definedTypes?: string[];
-  layer?: string;
   ratingBreakdown?: RatingBreakdownItem[];
   fileHash?: string;
   analyzerVersion?: string;
@@ -97,88 +76,10 @@ export interface GraphData {
   edges: GraphEdge[];
 }
 
-// ── Quality Loop Types ─────────────────────────────────────────
-
-export interface QueueItem {
-  id: number;
-  repo: string;
-  filePath: string;
-  currentRating: number;
-  targetRating: number;
-  priorityScore: number;
-  status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'skipped';
-  attempts: number;
-  maxAttempts: number;
-  workerId: string | null;
-  lockedAt: number | null;
-  errorMessage: string | null;
-  completedAt: number | null;
-  createdAt: number;
-}
-
-export interface AttemptLog {
-  id: number;
-  queueId: number;
-  attempt: number;
-  ratingBefore: number;
-  ratingAfter: number | null;
-  violationsFixed: number;
-  violationsRemaining: number;
-  fixSummary: string | null;
-  errorMessage: string | null;
-  durationMs: number | null;
-  createdAt: number;
-}
-
-export interface QueueStats {
-  total: number;
-  pending: number;
-  inProgress: number;
-  completed: number;
-  failed: number;
-  skipped: number;
-}
-
-export interface TrendDataPoint {
-  id: number;
-  repo: string;
-  overallRating: number;
-  filesTotal: number;
-  filesPassed: number;
-  filesFailed: number;
-  filesPending: number;
-  recordedAt: number;
-}
-
-export interface WorkerResult {
-  success: boolean;
-  newRating: number;
-  ratingBefore: number;
-  violationsRemaining: number;
-  violationsFixed: number;
-  durationMs: number;
-  attemptNumber: number;
-  fixSummary: string;
-  error?: string;
-  shouldRetry: boolean;
-  workerOutput?: string;
-}
-
-export interface QualityLoopConfig {
-  threshold: number;
-  maxWorkers: number;
-  maxAttemptsPerFile: number;
-  workerMode: 'cli' | 'api' | 'auto';
-  repos: string[];
-  excludePatterns: string[];
-  checkpointIntervalSec: number;
-  heartbeatIntervalSec: number;
-}
-
 // ── WebSocket Messages ────────────────────────────────────────
 
 export interface WSMessage {
-  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_progress' | 'scan_complete' | 'scan_log' | 'repo_list' | 'repo_created' | 'queue_update' | 'queue_progress' | 'worker_activity' | 'trend_update';
+  type: 'init' | 'update' | 'analysis_complete' | 'error' | 'scan_start' | 'scan_progress' | 'scan_complete' | 'scan_log' | 'repo_list' | 'repo_created';
   data?: GraphData;
   delta?: { nodes: GraphNode[]; edges: GraphEdge[] };
   analysis?: FileAnalysis;
@@ -191,19 +92,6 @@ export interface WSMessage {
   logMessage?: string;
   logLevel?: 'info' | 'warn' | 'error';
   logTimestamp?: number;
-
-  // Quality loop messages
-  queueItem?: QueueItem;
-  queueStats?: QueueStats;
-  queueOverallRating?: number;
-  queueDone?: boolean;
-  workerAction?: 'start' | 'complete' | 'error';
-  workerFilePath?: string;
-  workerId?: string;
-  workerRating?: number;
-  workerSuccess?: boolean;
-  workerError?: string;
-  trend?: TrendDataPoint;
 }
 
 export interface HookPayload {

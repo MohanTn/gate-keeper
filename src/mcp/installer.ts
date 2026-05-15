@@ -44,38 +44,132 @@ export function claudeCodeConfig(repoRoot: string): PlatformConfig {
 
 export function copilotConfig(repoRoot: string, mcpServerPath?: string): PlatformConfig {
   const serverPath = mcpServerPath ?? 'node dist/mcp/server.js';
-  const content = `# Gate Keeper — AI Coding Assistant Instructions
+  const content = `# Gate Keeper — Mandatory Quality Workflow
 
-## Architecture Context
-Before modifying any file in this repository, use the gate-keeper MCP server to understand the codebase structure.
+> **Every code action (plan, create, edit) must pass through the gate-keeper MCP tools. No exceptions.**
 
-## Available MCP Tools
-The gate-keeper MCP server provides 26+ tools. Key tools for pre-edit context:
-- \`get_graph_report\` — narrative architecture report with god nodes and surprising connections
-- \`check_pre_edit_safety\` — risk assessment before editing (returns safe/warn/block)
-- \`get_impact_set\` — files affected by a change (depth-bounded BFS)
-- \`summarize_file\` — structured file overview without reading full content
-- \`find_callers\` — all call sites for a function/symbol
-- \`trace_path\` — shortest import path between two files
-- \`query_graph\` — natural language queries (e.g., "what would break if auth.ts changed?")
+---
 
-## MCP Server
+## MCP Server Configuration
+
+Add this to your VS Code settings (or \`mcp.json\`) to register the gate-keeper MCP server:
+
 \`\`\`json
 {
   "mcpServers": {
     "gate-keeper": {
-      "command": "${serverPath}",
+      "command": "node",
+      "args": ["${serverPath}"],
       "cwd": "${repoRoot}"
     }
   }
 }
 \`\`\`
 
-## Pre-edit workflow
-1. \`get_graph_report\` → understand architecture
-2. \`check_pre_edit_safety(file_path)\` → get verdict
-3. If warn/block: \`get_impact_set(file_path, depth=2)\` → see affected files
-4. Make edit → \`analyze_file(file_path)\` → verify quality ≥ 7.0
+---
+
+## Tool Quick Reference
+
+| Category | Tool | What it does |
+|----------|------|-------------|
+| **Quality** | \`analyze_file\` | Rate a file 0–10, get violations |
+| | \`analyze_code\` | Preview quality before writing a new file |
+| | \`get_quality_rules\` | Learn scoring thresholds and deductions |
+| **Context** | \`summarize_file\` | Get file overview without reading raw content |
+| | \`get_file_context\` | Dependencies, reverse deps, cycles, rating |
+| | \`get_dependency_graph\` | Full architecture: coupling, hotspots, cycles |
+| | \`get_graph_report\` | Narrative report: god nodes, surprises |
+| **Safety** | \`check_pre_edit_safety\` | Risk verdict before editing (safe/warn/block) |
+| | \`get_impact_set\` | Files that would break if you change this one |
+| | \`predict_impact_with_remediation\` | Blast radius + fix instructions |
+| | \`find_callers\` | All call sites before renaming a function |
+| **Analysis** | \`suggest_refactoring\` | Ranked fixes for a low-rated file |
+| | \`get_codebase_health\` | Overall project quality scan |
+| | \`get_violation_patterns\` | Most common violations across the codebase |
+
+---
+
+## Session Start (once per session)
+
+\`\`\`
+get_quality_rules          ← learn scoring thresholds
+get_dependency_graph       ← see architecture, coupling hotspots, circular deps, worst-rated files
+\`\`\`
+
+---
+
+## Before Any Change
+
+\`\`\`
+get_file_context <file>
+\`\`\`
+
+If the file has **many reverse dependencies**:
+\`\`\`
+get_impact_analysis <file>             ← direct + transitive dependents
+predict_impact_with_remediation <file>  ← remediation for at-risk downstream files
+\`\`\`
+
+---
+
+## Writing Code
+
+### New file
+1. \`analyze_code <code string>\` — preview quality BEFORE writing to disk
+2. Only write if rating ≥ 7.0, or fix the code first
+3. After writing: \`analyze_file <path>\` to verify
+
+### Existing file
+1. Edit the file
+2. Immediately: \`analyze_file <absolute path>\` (MANDATORY)
+
+| Rating | Action |
+|--------|--------|
+| ≥ 7.0 | ✅ Done — proceed |
+| < 7.0 | \`suggest_refactoring\` → fix → \`analyze_file\` again (max 3 cycles) |
+
+---
+
+## After Bulk Changes (3+ files)
+
+\`\`\`
+get_codebase_health  ← verify overall project quality has not degraded
+\`\`\`
+
+---
+
+## Hard Rules
+
+- Never use \`any\` — use specific types or \`unknown\`
+- Never leave empty catch blocks
+- Never skip \`analyze_file\` after editing a code file
+- Never edit a widely-imported file without \`get_impact_analysis\` first
+
+---
+
+## Quality Thresholds
+
+| Metric | Deduction |
+|--------|-----------|
+| Error violation | −1.5 |
+| Warning violation | −0.5 |
+| Info violation | −0.1 |
+| Cyclomatic complexity >20 / >10 | −2.0 / −1.0 |
+| Import count >30 / >15 | −2.0 / −0.5 |
+| Lines >500 / >300 | −1.5 / −0.5 |
+| Circular dependency | −1.0 per cycle |
+| Test coverage <30% / <50% / <80% | −2.5 / −2.0 / −1.0 |
+
+**Minimum passing rating: 7.0 / 10**
+
+---
+
+## Fix Priority
+
+1. **Errors −1.5 each** — missing \`key\` props, empty catch blocks
+2. **Warnings −0.5 each** — \`any\` types, god classes, long methods (>50 lines), tight coupling
+3. **Circular deps −1.0 each** — break import cycles via shared types or dependency inversion
+4. **Info −0.1 each** — console.log statements
 `;
   return {
     platform: 'copilot',

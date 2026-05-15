@@ -7,3 +7,4 @@ export { usePanelActions } from './usePanelActions';
 export { useClearData } from './useClearData';
 export { useGraphData } from './useGraphData';
 export { useAppMetrics } from './useAppMetrics';
+export { useAppState } from './useAppState';

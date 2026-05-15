@@ -23,6 +23,10 @@ import * as http from 'http';
 import * as path from 'path';
 import * as readline from 'readline';
 import { spawnSync } from 'child_process';
+import {
+  ReplGraph, computeDegreeCentrality, findSurprising,
+  suggestQuestions, findPath,
+} from './repl-algorithms';
 
 const DAEMON_PORT = 5378;
 
@@ -49,93 +53,15 @@ function findGitRoot(dir: string): string {
   return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : dir;
 }
 
-function getModule(filePath: string, repoRoot: string): string {
-  const rel = path.relative(repoRoot, filePath);
-  const parts = rel.split(path.sep).filter(Boolean);
-  if (parts.length <= 1) return '(root)';
-  if (['src', 'lib', 'app'].includes(parts[0]!) && parts.length > 2) return parts[1]!;
-  return parts[0]!;
-}
+// Alias for backward compatibility within this file
+type GraphData = ReplGraph;
 
-// ── Pattern matchers (same logic as query_graph handler) ──
+// ── REPL query patterns ────────────────────────────────────
 
-interface GraphData {
-  nodes: Array<{ id: string; label: string; rating: number; metrics: { linesOfCode: number; importCount: number; cyclomaticComplexity: number }; violations: Array<{ type: string; severity: string }> }>;
-  edges: Array<{ source: string; target: string; type: string; strength: number }>;
-}
-
-function computeDegreeCentrality(graph: GraphData) {
-  const inDeg = new Map<string, number>();
-  const outDeg = new Map<string, number>();
-  for (const n of graph.nodes) { inDeg.set(n.id, 0); outDeg.set(n.id, 0); }
-  for (const e of graph.edges) {
-    outDeg.set(e.source, (outDeg.get(e.source) ?? 0) + 1);
-    inDeg.set(e.target, (inDeg.get(e.target) ?? 0) + 1);
-  }
-  return graph.nodes.map(n => ({
-    path: n.id, label: n.label, rating: n.rating,
-    inDegree: inDeg.get(n.id) ?? 0,
-    outDegree: outDeg.get(n.id) ?? 0,
-    totalDegree: (inDeg.get(n.id) ?? 0) + (outDeg.get(n.id) ?? 0),
-  })).sort((a, b) => b.totalDegree - a.totalDegree);
-}
-
-function findSurprising(graph: GraphData, repo: string, topN = 5) {
-  const nodeIds = new Set(graph.nodes.map(n => n.id));
-  const moduleOf = new Map<string, string>();
-  for (const n of graph.nodes) moduleOf.set(n.id, getModule(n.id, repo));
-
-  const pairCounts = new Map<string, number>();
-  for (const e of graph.edges) {
-    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    const sm = moduleOf.get(e.source) ?? '(?)';
-    const tm = moduleOf.get(e.target) ?? '(?)';
-    if (sm !== tm) {
-      const key = `${sm}→${tm}`;
-      pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
-    }
-  }
-
-  const results: Array<{ src: string; dst: string; S: string; T: string; score: number }> = [];
-  for (const e of graph.edges) {
-    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
-    const sm = moduleOf.get(e.source) ?? '(?)';
-    const tm = moduleOf.get(e.target) ?? '(?)';
-    if (sm === tm) continue;
-    const pairCount = pairCounts.get(`${sm}→${tm}`) ?? 1;
-    const score = 1 / Math.log(pairCount + 1);
-    results.push({ src: e.source, dst: e.target, S: sm, T: tm, score });
-  }
-
-  const seen = new Set<string>();
-  return results.sort((a, b) => b.score - a.score).filter(r => {
-    const k = `${r.src}|${r.dst}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  }).slice(0, topN);
-}
-
-function suggestQuestions(graph: GraphData, repo: string): string[] {
-  const centrality = computeDegreeCentrality(graph);
-  const top = centrality.slice(0, 3);
-  const worst = [...graph.nodes].sort((a, b) => a.rating - b.rating)[0];
-  const qs: string[] = [];
-  for (const god of top) {
-    qs.push(`What would break if "${path.relative(repo, god.path)}" changed?`);
-  }
-  if (worst && top[0] && worst.id !== top[0].path) {
-    qs.push(`How does "${path.relative(repo, top[0].path)}" connect to "${path.relative(repo, worst.id)}" (worst-rated file)?`);
-  }
-  if (worst && worst.rating < 7) {
-    qs.push(`What's wrong with "${path.relative(repo, worst.id)}" (rating ${worst.rating}/10)?`);
-  }
-  return qs;
-}
-
-// ── REPL ──────────────────────────────────────────────────
-
-const QUERY_PATTERNS: Array<{ name: string; desc: string; match: RegExp; handler: (m: RegExpExecArray, graph: GraphData, repo: string) => string }> = [
+export const QUERY_PATTERNS: Array<{
+  name: string; desc: string; match: RegExp;
+  handler: (m: RegExpExecArray, graph: GraphData, repo: string) => string;
+}> = [
   {
     name: 'god nodes',
     desc: 'most-connected files (highest blast radius)',
@@ -169,7 +95,7 @@ const QUERY_PATTERNS: Array<{ name: string; desc: string; match: RegExp; handler
     name: 'health / quality',
     desc: 'worst-rated files and overall quality',
     match: /health|quality|worst|bad|poor|rating/i,
-    handler: (_, graph, _repo) => {
+    handler: (_, graph) => {
       if (graph.nodes.length === 0) return 'No files in graph.';
       const avg = graph.nodes.reduce((s, n) => s + n.rating, 0) / graph.nodes.length;
       const worst = [...graph.nodes].sort((a, b) => a.rating - b.rating).slice(0, 5);
@@ -184,22 +110,71 @@ const QUERY_PATTERNS: Array<{ name: string; desc: string; match: RegExp; handler
   },
 ];
 
-async function main() {
-  const args = process.argv.slice(2);
-  const repoIndex = args.indexOf('--repo');
-  const repo = repoIndex >= 0 ? args[repoIndex + 1] : findGitRoot(process.cwd());
+// ── REPL command helpers ───────────────────────────────────
 
-  // Load graph
-  const graphRaw = await fetchApi(`/api/graph?repo=${encodeURIComponent(repo)}`);
-  if (!graphRaw) {
-    console.error('Error: Cannot connect to Gate Keeper daemon on port 5378.');
-    console.error('Start it with: npm run dev  (from the gate-keeper directory)');
-    process.exit(1);
+function printHelp(): void {
+  process.stdout.write('\n  Natural language queries:\n');
+  for (const p of QUERY_PATTERNS) process.stdout.write(`    ${p.desc}\n`);
+  process.stdout.write('  Commands:\n');
+  process.stdout.write('    explain <file>  — detailed file explanation\n');
+  process.stdout.write('    path <a> <b>    — shortest dependency path\n');
+  process.stdout.write('    refresh         — reload the graph from the daemon\n');
+  process.stdout.write('    help            — this message\n');
+  process.stdout.write('    quit / exit     — leave the REPL\n\n');
+}
+
+export function handleExplain(target: string, graph: GraphData, repo: string): void {
+  if (!target) {
+    process.stdout.write('No file specified.\n');
+    return;
   }
-  const graph = graphRaw as GraphData;
+  const match = graph.nodes.find(n =>
+    n.id.toLowerCase().includes(target.toLowerCase()) ||
+    n.label.toLowerCase().includes(target.toLowerCase())
+  );
+  if (!match) {
+    process.stdout.write(`No file matching "${target}" found in graph.\n`);
+    return;
+  }
+  const rel = path.relative(repo, match.id);
+  const errors = match.violations.filter(v => v.severity === 'error').length;
+  const warnings = match.violations.filter(v => v.severity === 'warning').length;
+  process.stdout.write(`\n  ${rel}\n`);
+  process.stdout.write(`  Rating: ${match.rating}/10 | LOC: ${match.metrics.linesOfCode} | Complexity: ${match.metrics.cyclomaticComplexity}\n`);
+  process.stdout.write(`  Imports: ${match.metrics.importCount} | Errors: ${errors} | Warnings: ${warnings}\n`);
+}
+
+export function handlePath(parts: string[], graph: GraphData, repo: string): void {
+  if (parts.length < 2) {
+    process.stdout.write('Usage: path <source-file> <target-file>\n');
+    return;
+  }
+  const a = parts[0] as string;
+  const b = parts[1] as string;
+  const src = graph.nodes.find(n => n.label.includes(a) || n.id.includes(a));
+  const dst = graph.nodes.find(n => n.label.includes(b) || n.id.includes(b));
+  if (!src || !dst) {
+    process.stdout.write(`Could not find matching files. Try: ${graph.nodes.slice(0, 10).map(n => n.label).join(', ')}\n`);
+    return;
+  }
+  process.stdout.write(`Path from ${path.relative(repo, src.id)} to ${path.relative(repo, dst.id)}:\n`);
+  const found = findPath(src.id, dst.id, graph.edges);
+  if (found) {
+    for (const f of found) {
+      const n = graph.nodes.find(node => node.id === f);
+      process.stdout.write(`  ${path.relative(repo, f)} (${n?.rating ?? '?'})\n`);
+    }
+  } else {
+    process.stdout.write('  No dependency path found between these files.\n');
+  }
+}
+
+// ── Core REPL loop (shared by main() and startRepl()) ─────
+
+async function runRepl(repo: string, graph: GraphData): Promise<void> {
   const repoName = path.basename(repo);
-  console.log(`\n  ⬡ Gate Keeper Query REPL — ${repoName}`);
-  console.log(`  ${graph.nodes.length} files, ${graph.edges.length} edges\n`);
+  process.stdout.write(`\n  ⬡ Gate Keeper Query REPL — ${repoName}\n`);
+  process.stdout.write(`  ${graph.nodes.length} files, ${graph.edges.length} edges\n\n`);
 
   const rl = readline.createInterface({
     input: process.stdin,
@@ -216,16 +191,7 @@ async function main() {
     if (trimmed === 'quit' || trimmed === 'exit') { rl.close(); return; }
 
     if (trimmed === 'help') {
-      console.log('\n  Natural language queries:');
-      for (const p of QUERY_PATTERNS) {
-        console.log(`    ${p.desc}`);
-      }
-      console.log('  Commands:');
-      console.log('    explain <file>  — detailed file explanation');
-      console.log('    path <a> <b>    — shortest dependency path');
-      console.log('    refresh         — reload the graph from the daemon');
-      console.log('    help            — this message');
-      console.log('    quit / exit     — leave the REPL\n');
+      printHelp();
       rl.prompt();
       return;
     }
@@ -234,83 +200,32 @@ async function main() {
       const freshRaw = await fetchApi(`/api/graph?repo=${encodeURIComponent(repo)}`);
       if (freshRaw) {
         Object.assign(graph, freshRaw);
-        console.log(`Refreshed: ${graph.nodes.length} files, ${graph.edges.length} edges`);
+        process.stdout.write(`Refreshed: ${graph.nodes.length} files, ${graph.edges.length} edges\n`);
       } else {
-        console.log('Refresh failed — daemon may be unavailable');
+        process.stdout.write('Refresh failed — daemon may be unavailable\n');
       }
       rl.prompt();
       return;
     }
 
     if (trimmed.startsWith('explain ')) {
-      const target = trimmed.slice(8).trim();
-      const match = graph.nodes.find(n =>
-        n.id.toLowerCase().includes(target.toLowerCase()) ||
-        n.label.toLowerCase().includes(target.toLowerCase())
-      );
-      if (!match) {
-        console.log(`No file matching "${target}" found in graph.`);
-      } else {
-        const rel = path.relative(repo, match.id);
-        const errors = match.violations.filter(v => v.severity === 'error').length;
-        const warnings = match.violations.filter(v => v.severity === 'warning').length;
-        console.log(`\n  ${rel}`);
-        console.log(`  Rating: ${match.rating}/10 | LOC: ${match.metrics.linesOfCode} | Complexity: ${match.metrics.cyclomaticComplexity}`);
-        console.log(`  Imports: ${match.metrics.importCount} | Errors: ${errors} | Warnings: ${warnings}`);
-      }
+      handleExplain(trimmed.slice(8).trim(), graph, repo);
       rl.prompt();
       return;
     }
 
     if (trimmed.startsWith('path ')) {
-      const parts = trimmed.slice(5).trim().split(/\s+/);
-      if (parts.length < 2) {
-        console.log('Usage: path <source-file> <target-file>');
-      } else {
-        const [a, b] = parts;
-        // Match by filename
-        const src = graph.nodes.find(n => n.label.includes(a) || n.id.includes(a));
-        const dst = graph.nodes.find(n => n.label.includes(b) || n.id.includes(b));
-        if (!src || !dst) {
-          console.log(`Could not find matching files. Try: ${graph.nodes.slice(0, 10).map(n => n.label).join(', ')}`);
-        } else {
-          console.log(`Path from ${path.relative(repo, src.id)} to ${path.relative(repo, dst.id)}:`);
-          // BFS
-          const queue: Array<{ id: string; trail: string[] }> = [{ id: src.id, trail: [src.id] }];
-          const visited = new Set([src.id]);
-          let found: string[] | null = null;
-          while (queue.length > 0) {
-            const { id, trail } = queue.shift()!;
-            for (const edge of graph.edges.filter(e => e.source === id)) {
-              if (visited.has(edge.target)) continue;
-              const nt = [...trail, edge.target];
-              if (edge.target === dst.id) { found = nt; break; }
-              visited.add(edge.target);
-              queue.push({ id: edge.target, trail: nt });
-            }
-            if (found) break;
-          }
-          if (found) {
-            found.forEach(f => {
-              const n = graph.nodes.find(n => n.id === f);
-              console.log(`  ${path.relative(repo, f)} (${n?.rating ?? '?'})`);
-            });
-          } else {
-            console.log('  No dependency path found between these files.');
-          }
-        }
-      }
+      handlePath(trimmed.slice(5).trim().split(/\s+/), graph, repo);
       rl.prompt();
       return;
     }
 
-    // NL pattern matching
     let answered = false;
     for (const p of QUERY_PATTERNS) {
       if (p.match.test(trimmed)) {
         const m = p.match.exec(trimmed);
         if (m) {
-          console.log(p.handler(m, graph, repo));
+          process.stdout.write(p.handler(m, graph, repo) + '\n');
           answered = true;
         }
         break;
@@ -318,163 +233,51 @@ async function main() {
     }
 
     if (!answered) {
-      console.log('Query not recognised. Try: "god nodes", "surprising connections", "health", "suggest questions", or type "help".');
+      process.stdout.write('Query not recognised. Try: "god nodes", "surprising connections", "health", "suggest questions", or type "help".\n');
     }
 
     rl.prompt();
   });
 
   rl.on('close', () => {
-    console.log('\nGoodbye.');
+    process.stdout.write('\nGoodbye.\n');
     process.exit(0);
   });
 }
+
+async function loadGraph(repo: string, startupHint: string): Promise<GraphData> {
+  const graphRaw = await fetchApi(`/api/graph?repo=${encodeURIComponent(repo)}`);
+  if (!graphRaw) {
+    process.stderr.write('Error: Cannot connect to Gate Keeper daemon on port 5378.\n');
+    process.stderr.write(`${startupHint}\n`);
+    process.exit(1);
+  }
+  return graphRaw as GraphData;
+}
+
+// ── Public entry points ────────────────────────────────────
 
 /**
  * Exported for use by the daemon's --query mode.
  * Loads the graph from the running daemon, then starts the REPL.
  */
 export async function startRepl(repo: string): Promise<void> {
-  const graphRaw = await fetchApi(`/api/graph?repo=${encodeURIComponent(repo)}`);
-  if (!graphRaw) {
-    console.error('Error: Cannot connect to Gate Keeper daemon on port 5378.');
-    console.error('Start the daemon first: npm run dev  (from the gate-keeper directory)');
-    process.exit(1);
-  }
-  const graph = graphRaw as GraphData;
-  const repoName = path.basename(repo);
-  console.log(`\n  ⬡ Gate Keeper Query REPL — ${repoName}`);
-  console.log(`  ${graph.nodes.length} files, ${graph.edges.length} edges\n`);
+  const graph = await loadGraph(repo, 'Start the daemon first: npm run dev  (from the gate-keeper directory)');
+  await runRepl(repo, graph);
+}
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    prompt: 'gk> ',
-  });
-
-  // Re-invoke the REPL loop wiring graph/repo into scope
-  rl.prompt();
-
-  rl.on('line', async (line: string) => {
-    const trimmed = line.trim();
-
-    if (!trimmed) { rl.prompt(); return; }
-    if (trimmed === 'quit' || trimmed === 'exit') { rl.close(); return; }
-
-    if (trimmed === 'help') {
-      console.log('\n  Natural language queries:');
-      for (const p of QUERY_PATTERNS) console.log(`    ${p.desc}`);
-      console.log('  Commands:');
-      console.log('    explain <file>  — detailed file explanation');
-      console.log('    path <a> <b>    — shortest dependency path');
-      console.log('    refresh         — reload the graph from the daemon');
-      console.log('    help            — this message');
-      console.log('    quit / exit     — leave the REPL\n');
-      rl.prompt();
-      return;
-    }
-
-    if (trimmed === 'refresh') {
-      const freshRaw = await fetchApi(`/api/graph?repo=${encodeURIComponent(repo)}`);
-      if (freshRaw) {
-        Object.assign(graph, freshRaw);
-        console.log(`Refreshed: ${graph.nodes.length} files, ${graph.edges.length} edges`);
-      } else {
-        console.log('Refresh failed — daemon may be unavailable');
-      }
-      rl.prompt();
-      return;
-    }
-
-    if (trimmed.startsWith('explain ')) {
-      const target = trimmed.slice(8).trim();
-      const match = graph.nodes.find(n =>
-        n.id.toLowerCase().includes(target.toLowerCase()) ||
-        n.label.toLowerCase().includes(target.toLowerCase())
-      );
-      if (!match) {
-        console.log(`No file matching "${target}" found in graph.`);
-      } else {
-        const rel = path.relative(repo, match.id);
-        const errors = match.violations.filter(v => v.severity === 'error').length;
-        const warnings = match.violations.filter(v => v.severity === 'warning').length;
-        console.log(`\n  ${rel}`);
-        console.log(`  Rating: ${match.rating}/10 | LOC: ${match.metrics.linesOfCode} | Complexity: ${match.metrics.cyclomaticComplexity}`);
-        console.log(`  Imports: ${match.metrics.importCount} | Errors: ${errors} | Warnings: ${warnings}`);
-      }
-      rl.prompt();
-      return;
-    }
-
-    if (trimmed.startsWith('path ')) {
-      const parts = trimmed.slice(5).trim().split(/\s+/);
-      if (parts.length < 2) {
-        console.log('Usage: path <source-file> <target-file>');
-      } else {
-        const [a, b] = parts;
-        const src = graph.nodes.find(n => n.label.includes(a) || n.id.includes(a));
-        const dst = graph.nodes.find(n => n.label.includes(b) || n.id.includes(b));
-        if (!src || !dst) {
-          console.log(`Could not find matching files. Try: ${graph.nodes.slice(0, 10).map(n => n.label).join(', ')}`);
-        } else {
-          console.log(`Path from ${path.relative(repo, src.id)} to ${path.relative(repo, dst.id)}:`);
-          const queue: Array<{ id: string; trail: string[] }> = [{ id: src.id, trail: [src.id] }];
-          const visited = new Set([src.id]);
-          let found: string[] | null = null;
-          while (queue.length > 0) {
-            const { id, trail } = queue.shift()!;
-            for (const edge of graph.edges.filter(e => e.source === id)) {
-              if (visited.has(edge.target)) continue;
-              const nt = [...trail, edge.target];
-              if (edge.target === dst.id) { found = nt; break; }
-              visited.add(edge.target);
-              queue.push({ id: edge.target, trail: nt });
-            }
-            if (found) break;
-          }
-          if (found) {
-            found.forEach(f => {
-              const n = graph.nodes.find(n => n.id === f);
-              console.log(`  ${path.relative(repo, f)} (${n?.rating ?? '?'})`);
-            });
-          } else {
-            console.log('  No dependency path found between these files.');
-          }
-        }
-      }
-      rl.prompt();
-      return;
-    }
-
-    // NL pattern matching
-    let answered = false;
-    for (const p of QUERY_PATTERNS) {
-      if (p.match.test(trimmed)) {
-        const m = p.match.exec(trimmed);
-        if (m) {
-          console.log(p.handler(m, graph, repo));
-          answered = true;
-        }
-        break;
-      }
-    }
-
-    if (!answered) {
-      console.log('Query not recognised. Try: "god nodes", "surprising connections", "health", "suggest questions", or type "help".');
-    }
-
-    rl.prompt();
-  });
-
-  rl.on('close', () => {
-    console.log('\nGoodbye.');
-    process.exit(0);
-  });
+async function main() {
+  const args = process.argv.slice(2);
+  const repoIndex = args.indexOf('--repo');
+  const repoArg = repoIndex >= 0 ? args[repoIndex + 1] : undefined;
+  const repo = repoArg ?? findGitRoot(process.cwd());
+  const graph = await loadGraph(repo, 'Start it with: npm run dev  (from the gate-keeper directory)');
+  await runRepl(repo, graph);
 }
 
 if (require.main === module) {
   main().catch(err => {
-    console.error(err);
+    process.stderr.write(String(err) + '\n');
     process.exit(1);
   });
 }

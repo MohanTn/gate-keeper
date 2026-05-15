@@ -1,9 +1,38 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+interface MockAnalyzer {
+  analyze: jest.Mock;
+  isSupportedFile: jest.Mock;
+}
+
+interface MockVizServer {
+  start: jest.Mock;
+  scan: jest.Mock;
+  scanRepo: jest.Mock;
+  broadcastRepoCreated: jest.Mock;
+  broadcastMessage: jest.Mock;
+  pushAnalysis: jest.Mock;
+}
+
+interface MockRes {
+  json: jest.Mock;
+  status: jest.Mock;
+}
+
+interface MockApp {
+  use: jest.Mock;
+  get: jest.Mock;
+  post: jest.Mock;
+  listen: jest.Mock;
+}
+
+type GKProcess = NodeJS.Process & { _gateKeeperSignalsRegistered?: boolean };
+type RouteHandler = (...args: unknown[]) => unknown;
+
 // Mock process.exit before any imports
 const mockExit = jest.fn();
-process.exit = mockExit as any;
+process.exit = mockExit as unknown as typeof process.exit;
 
 // Mock 'open' before viz-server is loaded (it's an ES module)
 jest.mock('open', () => ({
@@ -13,17 +42,17 @@ jest.mock('open', () => ({
 
 // Mock express to prevent actual server binding during tests
 jest.mock('express', () => {
-  const mockApp: any = {
+  const mockApp: MockApp = {
     use: jest.fn(),
     get: jest.fn(),
     post: jest.fn(),
-    listen: jest.fn((port: any, host: any, cb: any) => {
+    listen: jest.fn((port: number, host: string, cb: () => void) => {
       if (cb) cb();
       return { close: jest.fn() };
     }),
   };
-  const express = jest.fn(() => mockApp) as any;
-  express.json = jest.fn();
+  const express = jest.fn(() => mockApp) as unknown as MockApp & { json: jest.Mock };
+  (express as unknown as MockApp & { json: jest.Mock }).json = jest.fn();
   return express;
 });
 
@@ -40,7 +69,7 @@ jest.mock('./cache/sqlite-cache', () => ({
 }));
 
 // Mock UniversalAnalyzer — capture the instance so tests can configure it per-call
-let mockAnalyzerInstance: any;
+let mockAnalyzerInstance: MockAnalyzer;
 jest.mock('./analyzer/universal-analyzer', () => ({
   UniversalAnalyzer: jest.fn().mockImplementation(() => {
     mockAnalyzerInstance = {
@@ -52,7 +81,7 @@ jest.mock('./analyzer/universal-analyzer', () => ({
 }));
 
 // Mock VizServer - must return a proper instance with methods that return Promises
-let mockVizServerInstance: any;
+let mockVizServerInstance: MockVizServer;
 jest.mock('./viz/viz-server', () => ({
   VizServer: jest.fn().mockImplementation(() => {
     mockVizServerInstance = {
@@ -67,49 +96,12 @@ jest.mock('./viz/viz-server', () => ({
   }),
 }));
 
-// Mock QualityOrchestrator and loadQualityConfig
-let mockOrchestratorInstance: any;
-jest.mock('./quality-loop/orchestrator', () => ({
-  QualityOrchestrator: jest.fn().mockImplementation(() => {
-    mockOrchestratorInstance = {
-      start: jest.fn(),
-      stop: jest.fn(),
-      pause: jest.fn(),
-      resume: jest.fn(),
-      stats: { filesFixed: 0, filesSkipped: 0, totalAttempts: 0 },
-      isRunning: false,
-      isPaused: false,
-      getQueueItems: jest.fn().mockReturnValue([]),
-      getAttempts: jest.fn().mockReturnValue([]),
-      getTrends: jest.fn().mockReturnValue([]),
-      getConfig: jest.fn().mockReturnValue({ threshold: 7, maxWorkers: 3 }),
-      updateConfig: jest.fn(),
-      enqueueRepos: jest.fn().mockResolvedValue(2),
-      resetFailed: jest.fn().mockReturnValue(1),
-    };
-    return mockOrchestratorInstance;
-  }),
-  loadQualityConfig: jest.fn().mockReturnValue({
-    threshold: 7, maxWorkers: 3, maxAttemptsPerFile: 3,
-    workerMode: 'auto', repos: ['/test/repo'], excludePatterns: [],
-    checkpointIntervalSec: 300, heartbeatIntervalSec: 60,
-  }),
-}));
-
 // Mock child_process
 jest.mock('child_process', () => ({
   spawnSync: jest.fn(() => ({
     status: 0,
     stdout: '/test/repo',
   })),
-}));
-
-// Mock arch-config-manager
-jest.mock('./arch/arch-config-manager', () => ({
-  readArchConfig: jest.fn().mockReturnValue({}),
-  mergeFileLayer: jest.fn(),
-  getEffectiveLayer: jest.fn().mockReturnValue('application'),
-  DEFAULT_LAYERS: {},
 }));
 
 // Mock fs to prevent actual file system operations during module load
@@ -128,18 +120,18 @@ jest.mock('fs', () => {
 });
 
 // Helper to extract HTTP handler from express mock
-function extractHandler(method: 'get' | 'post', route: string) {
+function extractHandler(method: 'get' | 'post', route: string): RouteHandler {
   const express = require('express');
-  const mockApp = express.mock.results[express.mock.results.length - 1].value;
-  const calls = mockApp[method].mock.calls;
-  const call = calls.find((c: any[]) => c[0] === route);
-  return call ? call[call.length - 1] : null;
+  const mockApp = express.mock.results[express.mock.results.length - 1].value as MockApp;
+  const calls = mockApp[method].mock.calls as unknown[][];
+  const call = calls.find((c) => c[0] === route);
+  return (call ? call[call.length - 1] : null) as unknown as RouteHandler;
 }
 
 // Helper to create mock req/res
-function createMockReqRes(body?: any) {
-  const req = { body: body || {} };
-  const res: any = {
+function createMockReqRes(body?: unknown) {
+  const req = { body: body ?? {} };
+  const res: MockRes = {
     json: jest.fn().mockReturnThis(),
     status: jest.fn().mockReturnThis(),
   };
@@ -279,8 +271,8 @@ describe('main() startup', () => {
     await main();
 
     const mockApp = express.mock.results[express.mock.results.length - 1].value;
-    const getRoutes = mockApp.get.mock.calls.map((c: any[]) => c[0]);
-    const postRoutes = mockApp.post.mock.calls.map((c: any[]) => c[0]);
+    const getRoutes = mockApp.get.mock.calls.map((c: unknown[]) => c[0]);
+    const postRoutes = mockApp.post.mock.calls.map((c: unknown[]) => c[0]);
 
     expect(getRoutes).toContain('/health');
     expect(getRoutes).toContain('/repos');
@@ -602,25 +594,25 @@ describe('signal handling', () => {
 
     const origOn = process.on;
     const onSpy = jest.fn(origOn.bind(process));
-    (process as any).on = onSpy;
+    (process as unknown as { on: jest.Mock }).on = onSpy;
 
     await main();
-    const sigCount1 = onSpy.mock.calls.filter((c: any[]) => c[0] === 'SIGTERM' || c[0] === 'SIGINT').length;
+    const sigCount1 = onSpy.mock.calls.filter((c: unknown[]) => c[0] === 'SIGTERM' || c[0] === 'SIGINT').length;
 
     // Simulate calling main again (would increase counts if not guarded)
-    const procFlag = (process as any)._gateKeeperSignalsRegistered;
+    const procFlag = (process as GKProcess)._gateKeeperSignalsRegistered;
     expect(procFlag).toBe(true);
 
-    (process as any).on = origOn;
+    (process as unknown as { on: typeof origOn }).on = origOn;
   });
 
   it('should set the signal registration guard', async () => {
     jest.resetModules();
     const { main } = require('./daemon');
 
-    const beforeFlag = (process as any)._gateKeeperSignalsRegistered;
+    const beforeFlag = (process as GKProcess)._gateKeeperSignalsRegistered;
     await main();
-    const afterFlag = (process as any)._gateKeeperSignalsRegistered;
+    const afterFlag = (process as GKProcess)._gateKeeperSignalsRegistered;
 
     expect(afterFlag).toBe(true);
   });
@@ -645,7 +637,7 @@ describe('LCOV coverage watcher', () => {
     const fs = require('fs');
     await main();
 
-    const watchedPaths: string[] = (fs.watchFile as jest.Mock).mock.calls.map((c: any[]) => c[0]);
+    const watchedPaths: string[] = (fs.watchFile as jest.Mock).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(watchedPaths.some((p: string) => p.startsWith('/startup/repo') && p.includes('lcov.info'))).toBe(true);
   });
 
@@ -664,7 +656,7 @@ describe('LCOV coverage watcher', () => {
     });
     await handler(req, res);
 
-    const watchedPaths: string[] = (fs.watchFile as jest.Mock).mock.calls.map((c: any[]) => c[0]);
+    const watchedPaths: string[] = (fs.watchFile as jest.Mock).mock.calls.map((c: unknown[]) => c[0] as string);
     expect(watchedPaths.some((p: string) => p.startsWith('/new/repo') && p.includes('lcov.info'))).toBe(true);
   });
 
@@ -683,7 +675,7 @@ describe('LCOV coverage watcher', () => {
     await handler(req, res);
 
     // Grab any watchFile callback registered for /watch/repo
-    const call = (fs.watchFile as jest.Mock).mock.calls.find((c: any[]) => c[0].startsWith('/watch/repo'));
+    const call = (fs.watchFile as jest.Mock).mock.calls.find((c: unknown[]) => (c[0] as string).startsWith('/watch/repo'));
     expect(call).toBeDefined();
     const callback = call![2]; // (path, options, callback)
 
@@ -709,7 +701,7 @@ describe('LCOV coverage watcher', () => {
     });
     await handler(req, res);
 
-    const call = (fs.watchFile as jest.Mock).mock.calls.find((c: any[]) => c[0].startsWith('/stable/repo'));
+    const call = (fs.watchFile as jest.Mock).mock.calls.find((c: unknown[]) => (c[0] as string).startsWith('/stable/repo'));
     const callback = call![2];
 
     mockVizServerInstance.scanRepo.mockClear();
@@ -764,7 +756,7 @@ describe('LCOV coverage watcher', () => {
     });
     await handler(req, res);
 
-    const call = (fs.watchFile as jest.Mock).mock.calls.find((c: any[]) => c[0].startsWith('/errorcatch/repo'));
+    const call = (fs.watchFile as jest.Mock).mock.calls.find((c: unknown[]) => (c[0] as string).startsWith('/errorcatch/repo'));
     expect(call).toBeDefined();
     call![2]({ mtimeMs: 2 }, { mtimeMs: 1 }); // trigger callback
     jest.advanceTimersByTime(2100);
@@ -790,219 +782,10 @@ describe('LCOV coverage watcher', () => {
     }
 
     const dupPaths = (fs.watchFile as jest.Mock).mock.calls
-      .filter((c: any[]) => c[0].startsWith('/dedup/repo'))
-      .map((c: any[]) => c[0]);
+      .filter((c: unknown[]) => (c[0] as string).startsWith('/dedup/repo'))
+      .map((c: unknown[]) => c[0] as string);
     const unique = new Set(dupPaths);
     expect(dupPaths.length).toBe(unique.size);
-  });
-});
-
-describe('quality loop (--quality-loop flag)', () => {
-  let origArgv: string[];
-
-  beforeEach(() => {
-    jest.resetModules();
-    origArgv = process.argv;
-    process.argv = ['node', 'dist/daemon.js', '--quality-loop'];
-  });
-
-  afterEach(() => {
-    process.argv = origArgv;
-  });
-
-  it('creates QualityOrchestrator when --quality-loop flag is passed', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const { QualityOrchestrator } = require('./quality-loop/orchestrator');
-    expect(QualityOrchestrator).toHaveBeenCalled();
-  });
-
-  it('auto-populates repos from getAllRepositories when qlConfig.repos is empty', async () => {
-    const { loadQualityConfig } = require('./quality-loop/orchestrator');
-    loadQualityConfig.mockReturnValue({
-      threshold: 7, maxWorkers: 3, maxAttemptsPerFile: 3,
-      workerMode: 'auto', repos: [], excludePatterns: [],
-      checkpointIntervalSec: 300, heartbeatIntervalSec: 60,
-    });
-    jest.doMock('./cache/sqlite-cache', () => ({
-      SqliteCache: jest.fn().mockImplementation(() => ({
-        close: jest.fn(),
-        getRepository: jest.fn(),
-        saveRepository: jest.fn(),
-        getAllRepositories: jest.fn().mockReturnValue([{ path: '/reg/repo', name: 'r', id: 'x' }]),
-        getAll: jest.fn().mockReturnValue([]),
-        getRepos: jest.fn().mockReturnValue([]),
-      })),
-    }));
-    const { main } = require('./daemon');
-    await main();
-    const { QualityOrchestrator } = require('./quality-loop/orchestrator');
-    expect(QualityOrchestrator).toHaveBeenCalled();
-  });
-
-  it('falls back to cache.getRepos() when both getAllRepositories sources are empty', async () => {
-    const { loadQualityConfig } = require('./quality-loop/orchestrator');
-    loadQualityConfig.mockReturnValue({
-      threshold: 7, maxWorkers: 3, maxAttemptsPerFile: 3,
-      workerMode: 'auto', repos: [], excludePatterns: [],
-      checkpointIntervalSec: 300, heartbeatIntervalSec: 60,
-    });
-    jest.doMock('./cache/sqlite-cache', () => ({
-      SqliteCache: jest.fn().mockImplementation(() => ({
-        close: jest.fn(),
-        getRepository: jest.fn(),
-        saveRepository: jest.fn(),
-        getAllRepositories: jest.fn().mockReturnValue([]), // empty → triggers getRepos fallback
-        getAll: jest.fn().mockReturnValue([]),
-        getRepos: jest.fn().mockReturnValue(['/fallback/repo']),
-      })),
-    }));
-    const { main } = require('./daemon');
-    await main();
-    const { QualityOrchestrator } = require('./quality-loop/orchestrator');
-    const qlCfg = QualityOrchestrator.mock.calls[0][0];
-    expect(qlCfg.repos).toContain('/fallback/repo');
-  });
-
-  it('QualityOrchestrator callbacks: broadcast and getAnalyzedFiles work correctly', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const { QualityOrchestrator } = require('./quality-loop/orchestrator');
-    const callbacks = QualityOrchestrator.mock.calls[0][2] as {
-      broadcast: (msg: unknown) => void;
-      getAnalyzedFiles: (repo: string) => unknown[];
-    };
-    // Invoke broadcast — exercises the vizServer.broadcastMessage line
-    callbacks.broadcast({ type: 'worker_activity' });
-    expect(mockVizServerInstance.broadcastMessage).toHaveBeenCalled();
-    // Invoke getAnalyzedFiles — exercises cache.getAll line
-    const files = callbacks.getAnalyzedFiles('/test/repo');
-    expect(Array.isArray(files)).toBe(true);
-  });
-
-  it('/api/quality/queue returns orchestrator queue items', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('get', '/api/quality/queue');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(res.json).toHaveBeenCalledWith({ items: [] });
-  });
-
-  it('/api/quality/status returns orchestrator stats', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('get', '/api/quality/status');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ running: false, paused: false }));
-  });
-
-  it('/api/quality/start starts orchestrator when not running', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/start');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(mockOrchestratorInstance.start).toHaveBeenCalled();
-    expect(res.json).toHaveBeenCalledWith({ ok: true });
-  });
-
-  it('/api/quality/stop stops the orchestrator', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/stop');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(mockOrchestratorInstance.stop).toHaveBeenCalled();
-  });
-
-  it('/api/quality/pause pauses the orchestrator', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/pause');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(mockOrchestratorInstance.pause).toHaveBeenCalled();
-  });
-
-  it('/api/quality/resume resumes the orchestrator', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/resume');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(mockOrchestratorInstance.resume).toHaveBeenCalled();
-  });
-
-  it('/api/quality/enqueue enqueues repos and returns count', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/enqueue');
-    const { req, res } = createMockReqRes();
-    await handler(req, res);
-    expect(res.json).toHaveBeenCalledWith({ ok: true, enqueued: 2 });
-  });
-
-  it('/api/quality/reset resets failed items', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/reset');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(res.json).toHaveBeenCalledWith({ ok: true, reset: 1 });
-  });
-
-  it('/api/quality/trends returns trend data', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('get', '/api/quality/trends');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(res.json).toHaveBeenCalledWith([]);
-  });
-
-  it('/api/quality/attempts/:id returns attempts for a given id', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const express = require('express');
-    const mockApp = express.mock.results[express.mock.results.length - 1].value;
-    const call = mockApp.get.mock.calls.find((c: any[]) => c[0] === '/api/quality/attempts/:id');
-    const handler = call?.[call.length - 1];
-    const { res } = createMockReqRes();
-    handler({ params: { id: '42' } }, res);
-    expect(mockOrchestratorInstance.getAttempts).toHaveBeenCalledWith(42);
-  });
-
-  it('/api/quality/attempts/:id returns 400 for invalid id', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const express = require('express');
-    const mockApp = express.mock.results[express.mock.results.length - 1].value;
-    const call = mockApp.get.mock.calls.find((c: any[]) => c[0] === '/api/quality/attempts/:id');
-    const handler = call?.[call.length - 1];
-    const { res } = createMockReqRes();
-    handler({ params: { id: 'bad' } }, res);
-    expect(res.status).toHaveBeenCalledWith(400);
-  });
-
-  it('/api/quality/config GET returns current config', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('get', '/api/quality/config');
-    const { req, res } = createMockReqRes();
-    handler(req, res);
-    expect(mockOrchestratorInstance.getConfig).toHaveBeenCalled();
-  });
-
-  it('/api/quality/config POST updates threshold and maxWorkers', async () => {
-    const { main } = require('./daemon');
-    await main();
-    const handler = extractHandler('post', '/api/quality/config');
-    const { req, res } = createMockReqRes({ threshold: 8, maxWorkers: 2 });
-    handler(req, res);
-    expect(mockOrchestratorInstance.updateConfig).toHaveBeenCalledWith({ threshold: 8 });
-    expect(mockOrchestratorInstance.updateConfig).toHaveBeenCalledWith({ maxWorkers: 2 });
   });
 });
 
@@ -1054,7 +837,7 @@ describe('error paths and cleanup', () => {
   it('shutdown calls fs.unwatchFile for each registered lcov path', async () => {
     jest.resetModules();
     // Allow this main() call to register fresh signal handlers with the current module scope
-    (process as any)._gateKeeperSignalsRegistered = false;
+    (process as GKProcess)._gateKeeperSignalsRegistered = false;
 
     const { main } = require('./daemon');
     await main();
@@ -1069,7 +852,7 @@ describe('error paths and cleanup', () => {
     await handler(req, res);
 
     expect(
-      (fs.watchFile as jest.Mock).mock.calls.some((c: any[]) => c[0].startsWith('/shutdown/repo'))
+      (fs.watchFile as jest.Mock).mock.calls.some((c: unknown[]) => (c[0] as string).startsWith('/shutdown/repo'))
     ).toBe(true);
 
     (fs.unwatchFile as jest.Mock).mockClear();
@@ -1085,12 +868,12 @@ describe('error paths and cleanup', () => {
     const express = require('express');
     const mockApp = express.mock.results[express.mock.results.length - 1].value;
     // The CORS middleware is the second ipc.use() call (first is express.json())
-    const corsMiddleware = mockApp.use.mock.calls.find(
-      (c: any[]) => typeof c[0] === 'function' && c[0].length === 3
-    )?.[0];
+    const corsMiddleware = (mockApp.use.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === 'function' && (c[0] as { length: number }).length === 3
+    )?.[0]) as RouteHandler | undefined;
     if (!corsMiddleware) return; // skip if not found
 
-    const res: any = { setHeader: jest.fn(), sendStatus: jest.fn() };
+    const res: { setHeader: jest.Mock; sendStatus: jest.Mock } = { setHeader: jest.fn(), sendStatus: jest.fn() };
     const next = jest.fn();
     corsMiddleware({ method: 'GET' }, res, next);
     expect(next).toHaveBeenCalled();

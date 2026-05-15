@@ -18,7 +18,7 @@ import { text, envelope, McpResponse } from './shared';
 import { tokenTracker } from '../token-tracker';
 import { generateGraphReport } from '../../graph/graph-report';
 import { exportGraph, mergeGraphs, ExportFormat } from '../../graph/graph-export';
-import { computeCentrality, buildAdjacency, buildReverseAdjacency, getImpactSet, computeBetweennessCentrality } from '../../graph/graph-algorithms';
+import { computeCentrality, buildReverseAdjacency, getImpactSet } from '../../graph/graph-algorithms';
 import { findSurprisingConnections } from '../../graph/surprising-connections';
 import { suggestQuestions } from '../../graph/question-suggester';
 import { generateGraphViz } from '../../viz/graph-viz';
@@ -226,7 +226,6 @@ export async function handleExplainNode(args: Record<string, unknown>): Promise<
   const centralityEntry = centrality[rank];
 
   const revAdj = buildReverseAdjacency(graph.edges);
-  const adj = buildAdjacency(graph.edges);
   const ratings = ratingMap(graph);
 
   const impactSet = getImpactSet(filePath, revAdj, ratings, 2, 6);

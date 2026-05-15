@@ -87,7 +87,9 @@ function buildRegex(pattern: string, anchored: boolean): RegExp {
   // Escape special regex chars except * and ?
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '\x00GLOBSTAR\x00')  // placeholder
+    // Multi-level wildcard ** must be replaced before single-level *
+    // Use sentinel to avoid double-matching * inside **
+    .replace(/\*\*/g, '\x00GLOBSTAR\x00')
     .replace(/\*/g, '[^/]*')               // single-level wildcard
     .replace(/\x00GLOBSTAR\x00/g, '.*')    // multi-level wildcard
     .replace(/\?/g, '[^/]');              // single char wildcard
