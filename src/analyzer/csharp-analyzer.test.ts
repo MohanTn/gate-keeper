@@ -299,8 +299,10 @@ describe('CSharpAnalyzer', () => {
       it('should detect long methods', () => {
         const csFile = path.join(tempDir, 'longmethod.cs');
         const lines = [
+          'public class TestClass {',
           'public void LongMethod() {',
           ...Array(55).fill('  // doing something'),
+          '}',
           '}'
         ];
         fs.writeFileSync(csFile, lines.join('\n'));

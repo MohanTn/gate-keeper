@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Mandatory Skill:** `gate-keeper-quality` — the full quality workflow (tool cheat sheet, phased steps, hard rules, and thresholds) is defined in the gate-keeper-quality skill. Follow every phase: Session Start → Before Change → After Edit → Post-Edit Verification. No exceptions.
+@inject `/.github/instructions/gate-keeper.instructions.md` to be mandetory rule to folow for every code action (plan, create, edit)
 
 ---
 
@@ -14,13 +14,13 @@ bash scripts/setup.sh               # First-time: install deps + build everythin
 npm run build                       # TypeScript only (src/ → dist/)
 npm run build:dashboard             # Dashboard only (dashboard/src/ → dashboard/dist/)
 npm run build:all                   # Build everything
+npm run build:csharp                # Build Roslyn C# analyzer (requires dotnet 8+)
 
 # Run daemon
 npm run daemon                      # node dist/daemon.js
 npm run dev                         # npx tsx src/daemon.ts (no build step needed)
 npm run dev -- --watch              # Watch mode: polls for file changes, auto re-analyzes
 npm run dev -- --query              # Interactive graph query REPL
-npm run dev -- --quality-loop       # Start quality loop auto-fixer
 
 # MCP server
 npm run mcp                         # node dist/mcp/server.js
@@ -32,7 +32,7 @@ npx tsx src/cli/setup.ts --claude   # Claude Code hooks only
 npx tsx src/cli/setup.ts --copilot  # .vscode/mcp.json for VS Code
 
 # Tests
-npm test                            # Run all tests (967 across 37 suites)
+npm test                            # Run all tests (1233 across 45 suites)
 npm run test:watch                  # Watch mode
 npm run test:coverage               # With coverage report
 

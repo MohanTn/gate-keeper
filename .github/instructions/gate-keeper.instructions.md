@@ -14,10 +14,10 @@ applyTo: "**/*.{ts,tsx,jsx,js,cs}"
 
 | Trigger | Tools to call |
 |---------|--------------|
-| Session start | `get_quality_rules` → `get_dependency_graph` |
-| Planning a change | `get_file_context` → `get_impact_analysis` (if widely imported) → `predict_impact_with_remediation` |
+| Session start | `get_quality_rules` → `get_graph_report` |
+| Planning a change | `summarize_file` → `check_pre_edit_safety` |
 | Creating a new file | `analyze_code` (preview before writing) → `analyze_file` (after writing) |
-| Editing an existing file | `get_file_context` → edit → `analyze_file` → `suggest_refactoring` (if rating < 7.0) |
+| Editing an existing file | `check_pre_edit_safety` → edit → `analyze_file` → `suggest_refactoring` (if rating < 7.0) |
 | Rating still < 7.0 after fix | `analyze_file` again → repeat up to 3 cycles |
 | After bulk changes (3+ files) | `get_codebase_health` |
 | Starting a cleanup sprint | `get_violation_patterns` |
@@ -27,24 +27,28 @@ applyTo: "**/*.{ts,tsx,jsx,js,cs}"
 ## Phase 0 — Session Start (once per session)
 
 ```
-get_quality_rules          ← learn scoring thresholds
-get_dependency_graph       ← see architecture, coupling hotspots, circular deps, worst-rated files
+get_quality_rules   ← learn scoring thresholds
+get_graph_report    ← god nodes, surprising cross-module connections, architecture overview,
+                       auto-suggested questions (~1 call replaces get_dependency_graph +
+                       get_centrality_rank + 5–15 summarize_file calls)
 ```
 
 ---
 
 ## Phase 1 — Before Any Change (plan or edit)
 
+For any file you haven't recently touched, one call returns rating, metrics, imports, dependents, and violation counts (~300 tokens):
 ```
-get_file_context <file>
+summarize_file <file>       ← replaces analyze_file + get_dependency_graph + get_impact_analysis
 ```
-Returns: dependencies, reverse deps, circular cycles (−1.0 each), rating breakdown, trend, git diff.
 
-If the file has **many reverse dependencies**:
+Then gate the edit with a combined impact-set BFS + fragility verdict:
 ```
-get_impact_analysis <file>           ← direct + transitive dependents, at-risk files (rating < 6)
-predict_impact_with_remediation <file> ← targeted remediation steps for at-risk downstream files
+check_pre_edit_safety <file>  ← safe / warn / block verdict with blast-radius reasoning
+                                 (replaces analyze_file + get_impact_analysis + manual interpretation)
 ```
+
+If the verdict is **block**, run `predict_impact_with_remediation <file>` for targeted fix steps before proceeding.
 
 ---
 
@@ -101,7 +105,8 @@ get_codebase_health         ← verify overall project quality has not degraded
 - Never use `any` — use specific types or `unknown`
 - Never leave empty catch blocks
 - Never skip `analyze_file` after editing a code file
-- Never edit a widely-imported file without running `get_impact_analysis` first
+- Never edit a file not recently touched without running `check_pre_edit_safety` first
+- Never call `analyze_file + get_dependency_graph + get_impact_analysis` separately — use `summarize_file` + `check_pre_edit_safety` instead
 
 ---
 

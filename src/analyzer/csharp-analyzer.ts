@@ -66,11 +66,11 @@ export class CSharpAnalyzer {
   }
 
   private analyzeWithRoslyn(filePath: string): CSharpAnalysisResult {
-    const analyzerPath = path.join(__dirname, '../../CSharpAnalyzer/bin/Release/net8.0/CSharpAnalyzer');
-    if (!fs.existsSync(analyzerPath) && !fs.existsSync(analyzerPath + '.exe')) {
-      throw new Error('Roslyn analyzer not built');
+    const dllPath = path.join(__dirname, '../../CSharpAnalyzer/bin/Release/net8.0/CSharpAnalyzer.dll');
+    if (!fs.existsSync(dllPath)) {
+      throw new Error('Roslyn analyzer not built — run: dotnet build CSharpAnalyzer -c Release');
     }
-    const result = execSync(`dotnet "${analyzerPath}" --file "${filePath}" --output json`, {
+    const result = execSync(`dotnet "${dllPath}" --file "${filePath}"`, {
       encoding: 'utf8',
       timeout: 10000
     });

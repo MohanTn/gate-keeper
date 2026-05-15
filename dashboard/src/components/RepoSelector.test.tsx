@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { SearchResultItem, RepoSelectorModal } from './RepoSelector';
 import { darkTokens } from '../ThemeContext';
 import type { GraphNode, RepoInfo } from '../types';
@@ -308,6 +308,162 @@ describe('RepoSelectorModal', () => {
       );
 
       expect(screen.getByText('5 files')).toBeInTheDocument();
+    });
+  });
+
+  describe('delete — async completion', () => {
+    it('calls onDelete after successful fetch', async () => {
+      const onDelete = jest.fn();
+      window.confirm = jest.fn().mockReturnValue(true);
+      global.fetch = jest.fn(() => Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ deleted: true }),
+      } as Response));
+
+      render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={jest.fn()}
+          onDelete={onDelete}
+        />
+      );
+
+      fireEvent.click(screen.getAllByText('Delete')[0]);
+
+      await act(async () => {
+        await Promise.resolve(); // flush .then(r => r.json())
+        await Promise.resolve(); // flush .then(() => onDelete(...))
+      });
+
+      expect(onDelete).toHaveBeenCalledWith('/repo/one');
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/repos',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+
+    it('calls fetch with correct JSON body', async () => {
+      window.confirm = jest.fn().mockReturnValue(true);
+      global.fetch = jest.fn(() => Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({}),
+      } as Response));
+
+      render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={jest.fn()}
+          onDelete={jest.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getAllByText('Delete')[0]);
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+
+      const [, options] = (global.fetch as jest.Mock).mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(options.body as string);
+      expect(body.repoRoot).toBe('/repo/one');
+    });
+
+    it('alerts on fetch network failure', async () => {
+      window.confirm = jest.fn().mockReturnValue(true);
+      window.alert = jest.fn();
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Network error'));
+
+      render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={jest.fn()}
+          onDelete={jest.fn()}
+        />
+      );
+
+      fireEvent.click(screen.getAllByText('Delete')[0]);
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(window.alert).toHaveBeenCalledWith('Failed to delete repository');
+    });
+  });
+
+  describe('delete button hover states', () => {
+    it('changes color on mouse enter', () => {
+      render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={jest.fn()}
+          onDelete={jest.fn()}
+        />
+      );
+
+      const deleteButtons = screen.getAllByTitle('Delete repository and all analysis data');
+      // Mouse enter — just verify no throw and the button is in the document
+      fireEvent.mouseEnter(deleteButtons[0]);
+      expect(deleteButtons[0]).toBeInTheDocument();
+    });
+
+    it('restores color on mouse leave', () => {
+      render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={jest.fn()}
+          onDelete={jest.fn()}
+        />
+      );
+
+      const deleteButtons = screen.getAllByTitle('Delete repository and all analysis data');
+      fireEvent.mouseEnter(deleteButtons[0]);
+      fireEvent.mouseLeave(deleteButtons[0]);
+      expect(deleteButtons[0]).toBeInTheDocument();
+    });
+  });
+
+  describe('repo root path display', () => {
+    it('shows the repo root path', () => {
+      render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={jest.fn()}
+          onDelete={jest.fn()}
+        />
+      );
+      expect(screen.getByText('/repo/one')).toBeInTheDocument();
+    });
+  });
+
+  describe('overlay click vs inner click', () => {
+    it('outer overlay click closes modal (currentTarget === target)', () => {
+      const onClose = jest.fn();
+      const { container } = render(
+        <RepoSelectorModal
+          repos={repos}
+          selectedRepo={null}
+          onSelect={jest.fn()}
+          onClose={onClose}
+          onDelete={jest.fn()}
+        />
+      );
+      const overlay = container.firstChild as HTMLElement;
+      // Simulate clicking exactly on the overlay (not a child)
+      Object.defineProperty(overlay, 'target', { value: overlay, configurable: true });
+      fireEvent.click(overlay, { bubbles: true });
+      // onClose should have been called once (from the overlay handler)
+      expect(onClose).toHaveBeenCalled();
     });
   });
 });

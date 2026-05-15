@@ -7,6 +7,7 @@
     "build": "tsc && echo 'Build complete'",
     "build:dashboard": "cd dashboard && npm install && npm run build",
     "build:all": "npm run build && npm run build:dashboard",
+    "build:csharp": "dotnet build CSharpAnalyzer -c Release",
     "daemon": "node dist/daemon.js",
     "dev": "npx tsx src/daemon.ts",
     "mcp": "node dist/mcp/server.js",

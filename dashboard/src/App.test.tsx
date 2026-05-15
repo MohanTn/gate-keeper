@@ -19,7 +19,6 @@ jest.mock('./hooks', () => ({
     useNodeHandlers: () => ({ selectedNode: null, handleClearSelection: jest.fn(), handleNodeSelect: jest.fn() }),
     useSearchUI: () => ({ searchQuery: '', searchRef: { current: null }, searchResults: [], showSearchDropdown: false, handleSearchSelect: jest.fn(), handleSearchChange: jest.fn(), handleSearchFocus: jest.fn(), handleSearchBlur: jest.fn(), handleSearchKeyDown: jest.fn() }),
     usePanelActions: () => ({ showFileList: false, showFilterPanel: false, showViolationsPanel: false, handleShowRepoSelector: jest.fn(), handleFileListOpen: jest.fn(), handleFileListSelect: jest.fn(), handleFileListClose: jest.fn(), handleToggleFilterPanel: jest.fn(), handleCloseFilterPanel: jest.fn(), handleToggleViolationsPanel: jest.fn(), handleCloseViolationsPanel: jest.fn(), handleClear: jest.fn() }),
-    useArchConfig: () => null,
     useAppMetrics: () => ({ totalViolations: 0, overallRating: null, currentRepoLabel: null, scanPct: null }),
 }));
 jest.mock('./hooks/useAppState', () => ({

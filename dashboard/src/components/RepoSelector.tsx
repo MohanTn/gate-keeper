@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { useTheme } from '../ThemeContext';
 import { ratingColor } from '../ThemeContext';
 import { GraphNode, RepoInfo } from '../types';
@@ -89,23 +89,25 @@ function RepoButton({ repo, isSelected, onSelect, onDelete }: {
     onDelete: (repoRoot: string) => void;
 }) {
     const { T } = useTheme();
-    const handleClick = useCallback(() => onSelect(repo.repoRoot), [repo.repoRoot, onSelect]);
-    const handleDelete = useCallback((e: React.MouseEvent) => {
-        e.stopPropagation();
-        if (!window.confirm(`Delete "${repo.label}" and all its analysis data? This cannot be undone.`)) return;
-        fetch('/api/repos', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ repoRoot: repo.repoRoot }),
-        })
-            .then(r => r.json())
-            .then(() => onDelete(repo.repoRoot))
-            .catch(() => alert('Failed to delete repository'));
-    }, [repo.repoRoot, repo.label, onDelete]);
-    const handleMouse = useCallback((e: React.MouseEvent<HTMLButtonElement>, enter: boolean) => {
-        (e.currentTarget as HTMLButtonElement).style.color = enter ? T.red : T.textMuted;
-        (e.currentTarget as HTMLButtonElement).style.borderColor = enter ? T.red : T.border;
-    }, [T.red, T.textMuted, T.border]);
+    const { handleClick, handleDelete, handleMouse } = useMemo(() => ({
+        handleClick: () => onSelect(repo.repoRoot),
+        handleDelete: (e: React.MouseEvent) => {
+            e.stopPropagation();
+            if (!window.confirm(`Delete "${repo.label}" and all its analysis data? This cannot be undone.`)) return;
+            fetch('/api/repos', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ repoRoot: repo.repoRoot }),
+            })
+                .then(r => r.json())
+                .then(() => onDelete(repo.repoRoot))
+                .catch(() => alert('Failed to delete repository'));
+        },
+        handleMouse: (e: React.MouseEvent<HTMLButtonElement>, enter: boolean) => {
+            (e.currentTarget as HTMLButtonElement).style.color = enter ? T.red : T.textMuted;
+            (e.currentTarget as HTMLButtonElement).style.borderColor = enter ? T.red : T.border;
+        },
+    }), [repo.repoRoot, repo.label, onSelect, onDelete, T.red, T.textMuted, T.border]);
 
     return (
         <div style={{

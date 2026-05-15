@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { QueueItem, AttemptLog } from '../types';
 import { ThemeTokens } from '../ThemeContext';
 import { useRepoSessions } from '../hooks/useRepoSessions';
@@ -27,17 +27,16 @@ export function QualityQueuePanel({ items, T }: Props) {
   } = useWorkerExecution();
   const { attempts, loadingAttempts, expandedId, loadAttempts } = useAttemptHistory();
 
-  const getCmdText = useCallback((filePath: string, repo: string): string => {
-    const sessionType = repoSessionTypes[repo] || 'unknown';
-    const shortFile = filePath.split('/').pop() || filePath;
-    return sessionType === 'github-copilot'
-      ? `gh copilot suggest "fix violations in ${shortFile}"`
-      : `claude --dangerously-skip-permissions "fix all violations in @${shortFile}"`;
-  }, [repoSessionTypes]);
-
-  const getSessionType = useCallback((repo: string): string => {
-    return repoSessionTypes[repo] || 'unknown';
-  }, [repoSessionTypes]);
+  const { getCmdText, getSessionType } = useMemo(() => ({
+    getSessionType: (repo: string): string => repoSessionTypes[repo] || 'unknown',
+    getCmdText: (filePath: string, repo: string): string => {
+      const sessionType = repoSessionTypes[repo] || 'unknown';
+      const shortFile = filePath.split('/').pop() || filePath;
+      return sessionType === 'github-copilot'
+        ? `gh copilot suggest "fix violations in ${shortFile}"`
+        : `claude --dangerously-skip-permissions "fix all violations in @${shortFile}"`;
+    },
+  }), [repoSessionTypes]);
 
   const handleDelete = useCallback(async (item: QueueItem) => {
     clearWorkerState(item.id);
