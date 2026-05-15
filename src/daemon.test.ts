@@ -28,6 +28,7 @@ interface MockApp {
 }
 
 type GKProcess = NodeJS.Process & { _gateKeeperSignalsRegistered?: boolean };
+type RouteHandler = (...args: unknown[]) => unknown;
 
 // Mock process.exit before any imports
 const mockExit = jest.fn();
@@ -103,14 +104,6 @@ jest.mock('child_process', () => ({
   })),
 }));
 
-// Mock arch-config-manager
-jest.mock('./arch/arch-config-manager', () => ({
-  readArchConfig: jest.fn().mockReturnValue({}),
-  mergeFileLayer: jest.fn(),
-  getEffectiveLayer: jest.fn().mockReturnValue('application'),
-  DEFAULT_LAYERS: {},
-}));
-
 // Mock fs to prevent actual file system operations during module load
 jest.mock('fs', () => {
   const actualFs = jest.requireActual('fs');
@@ -127,12 +120,12 @@ jest.mock('fs', () => {
 });
 
 // Helper to extract HTTP handler from express mock
-function extractHandler(method: 'get' | 'post', route: string) {
+function extractHandler(method: 'get' | 'post', route: string): RouteHandler {
   const express = require('express');
   const mockApp = express.mock.results[express.mock.results.length - 1].value as MockApp;
   const calls = mockApp[method].mock.calls as unknown[][];
   const call = calls.find((c) => c[0] === route);
-  return call ? call[call.length - 1] : null;
+  return (call ? call[call.length - 1] : null) as unknown as RouteHandler;
 }
 
 // Helper to create mock req/res
@@ -875,9 +868,9 @@ describe('error paths and cleanup', () => {
     const express = require('express');
     const mockApp = express.mock.results[express.mock.results.length - 1].value;
     // The CORS middleware is the second ipc.use() call (first is express.json())
-    const corsMiddleware = mockApp.use.mock.calls.find(
+    const corsMiddleware = (mockApp.use.mock.calls.find(
       (c: unknown[]) => typeof c[0] === 'function' && (c[0] as { length: number }).length === 3
-    )?.[0];
+    )?.[0]) as RouteHandler | undefined;
     if (!corsMiddleware) return; // skip if not found
 
     const res: { setHeader: jest.Mock; sendStatus: jest.Mock } = { setHeader: jest.fn(), sendStatus: jest.fn() };
