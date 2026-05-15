@@ -39,17 +39,11 @@ interface AppContentProps {
     T: ThemeTokens;
 }
 
-export function AppContent({
-    repoLoading, scanning, filteredGraphData, graphData, selectedNode,
-    showFileList, showFilterPanel, showViolationsPanel, selectedRepo,
-    patterns, scanExcludePatterns, wsStatus,
-    onNodeSelect, onCanvasClick, onFileListSelect, onFileListClose,
-    onFilterClose, onViolationsClose, onAddPattern, onRemovePattern,
-    onScanAll, T,
-}: AppContentProps) {
-    const [panelWidth, setPanelWidth] = useState(400);
+function useResizablePanel(minWidth = 250, maxWidth = 800, defaultWidth = 400) {
+    const [panelWidth, setPanelWidth] = useState(defaultWidth);
     const [isResizing, setIsResizing] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
+    const [dividerHover, setDividerHover] = useState(false);
 
     useEffect(() => {
         if (!isResizing) return;
@@ -58,7 +52,7 @@ export function AppContent({
             const container = containerRef.current;
             const containerRect = container.getBoundingClientRect();
             const newWidth = containerRect.right - e.clientX;
-            if (newWidth >= 250 && newWidth <= 800) setPanelWidth(newWidth);
+            if (newWidth >= minWidth && newWidth <= maxWidth) setPanelWidth(newWidth);
         };
         const handleMouseUp = () => setIsResizing(false);
         document.addEventListener('mousemove', handleMouseMove);
@@ -67,13 +61,24 @@ export function AppContent({
             document.removeEventListener('mousemove', handleMouseMove);
             document.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [isResizing]);
+    }, [isResizing, minWidth, maxWidth]);
 
-    const [dividerHover, setDividerHover] = useState(false);
+    const onDividerMouseDown = useCallback(() => setIsResizing(true), []);
+    const onDividerMouseEnter = useCallback(() => setDividerHover(true), []);
+    const onDividerMouseLeave = useCallback(() => setDividerHover(false), []);
 
-    const handleDividerMouseDown = useCallback(() => setIsResizing(true), []);
-    const handleDividerMouseEnter = useCallback(() => setDividerHover(true), []);
-    const handleDividerMouseLeave = useCallback(() => setDividerHover(false), []);
+    return { panelWidth, isResizing, containerRef, dividerHover, onDividerMouseDown, onDividerMouseEnter, onDividerMouseLeave };
+}
+
+export function AppContent({
+    repoLoading, scanning, filteredGraphData, graphData, selectedNode,
+    showFileList, showFilterPanel, showViolationsPanel, selectedRepo,
+    patterns, scanExcludePatterns, wsStatus,
+    onNodeSelect, onCanvasClick, onFileListSelect, onFileListClose,
+    onFilterClose, onViolationsClose, onAddPattern, onRemovePattern,
+    onScanAll, T,
+}: AppContentProps) {
+    const { panelWidth, containerRef, dividerHover, isResizing, onDividerMouseDown, onDividerMouseEnter, onDividerMouseLeave } = useResizablePanel();
 
     if (repoLoading) {
         return (
@@ -162,9 +167,9 @@ export function AppContent({
             )}
             {(
                 <div
-                    onMouseDown={handleDividerMouseDown}
-                    onMouseEnter={handleDividerMouseEnter}
-                    onMouseLeave={handleDividerMouseLeave}
+                    onMouseDown={onDividerMouseDown}
+                    onMouseEnter={onDividerMouseEnter}
+                    onMouseLeave={onDividerMouseLeave}
                     style={{
                         width: 8, paddingLeft: 2, paddingRight: 2,
                         cursor: 'col-resize',

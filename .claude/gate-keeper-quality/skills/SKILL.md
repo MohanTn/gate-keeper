@@ -1,4 +1,6 @@
 ---
+name: gate-keeper-quality
+description: "Mandatory quality workflow for this project — every code action must pass through gate-keeper MCP tools. Invoke automatically on session start and before/after every edit."
 applyTo: "**/*.{ts,tsx,jsx,js,cs}"
 ---
 

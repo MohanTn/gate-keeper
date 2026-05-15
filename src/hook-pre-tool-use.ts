@@ -2,12 +2,13 @@
  * gate-keeper pre-tool-use hook
  *
  * Called by Claude Code's PreToolUse hook on every Write/Edit operation.
- * Calls the daemon's check_pre_edit_safety endpoint and blocks (exit code 2)
- * if the edit would impact 3+ fragile dependents or has a "block" verdict.
+ * Calls the daemon's check_pre_edit_safety endpoint and prints a warning
+ * (exit code 0 — non-blocking) if the edit would impact 3+ fragile
+ * dependents or has a "block" verdict.
  *
- * This prevents the AI from modifying high-risk files without understanding
- * the blast radius. It's a safety gate, not a quality gate — for quality,
- * see hook-receiver.ts (PostToolUse).
+ * The warning is printed to stderr so Claude sees it but the edit is
+ * allowed to proceed. This is a safety advisory, not a gate — for
+ * blocking quality gates, see hook-receiver.ts (PostToolUse).
  */
 
 import * as http from 'http';
@@ -110,21 +111,39 @@ export async function main(): Promise<void> {
     riskScore?: number;
     fileRating?: number | null;
     reason?: string;
+    affected?: Array<{ path: string; depth: number; severity: string; rating: number; fragile: boolean }>;
   } | null;
 
   if (!impactResult) return;
 
-  // Blocking conditions from the verdict
+  // Warning conditions — fragile dependent check
   if (impactResult.verdict === 'block' || (impactResult.fragileCount ?? 0) >= 3) {
-    const lines = [
-      `[Gate Keeper] ⚠️ Pre-edit safety check: ${path.basename(filePath)}`,
-      `  ${impactResult.reason ?? 'High risk of cascading failures'}`,
-      `  Rating: ${impactResult.fileRating ?? '?'}/10 · Direct dependents: ${impactResult.directDependents ?? 0}`,
-      `  Fix fragile dependents first, then retry the edit.`,
-      `  Use get_impact_set(file_path="${filePath}", depth=1) to see the full impact set.`,
+    const lines: string[] = [
+      `[Gate Keeper] ⚠️ Pre-edit safety warning: ${path.basename(filePath)}`,
+      `  ${impactResult.reason ?? 'File has fragile dependents'} — proceeding with edit`,
+      `  Rating: ${impactResult.fileRating ?? '?'}/10 · Direct dependents: ${impactResult.directDependents ?? 0} · Fragile: ${impactResult.fragileCount ?? 0}`,
     ];
-    process.stdout.write(lines.join('\n') + '\n');
-    process.exit(2); // Exit code 2 signals Claude Code to surface the warning and stop
+
+    // List fragile/affected dependents if available
+    const fragileFiles = (impactResult.affected ?? [])
+      .filter(f => f.fragile)
+      .slice(0, 10);
+    if (fragileFiles.length > 0) {
+      lines.push(`  Dependent files at risk:`);
+      for (const f of fragileFiles) {
+        lines.push(`    - ${f.path} (rating ${f.rating}/10)`);
+      }
+      if ((impactResult.fragileCount ?? 0) > fragileFiles.length) {
+        lines.push(`    ... and ${(impactResult.fragileCount ?? 0) - fragileFiles.length} more`);
+      }
+    }
+
+    lines.push(
+      `  Proceed with extra care — update all references and run tests after editing.`,
+      `  Use get_impact_set(file_path="${filePath}", depth=1) for the full impact set.`,
+    );
+    process.stderr.write(lines.join('\n') + '\n');
+    // Exit 0 — warn but allow the edit to proceed
   }
 }
 

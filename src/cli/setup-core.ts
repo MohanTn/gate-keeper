@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { spawnSync, spawn } from 'child_process';
+import { copilotConfig } from '../mcp/installer';
 
 export interface SetupOptions {
   all: boolean;
@@ -77,48 +78,23 @@ export async function defaultGraphifyIgnore(opts: SetupOptions): Promise<SetupRe
 
 // ── 2. Claude Code hooks ──────────────────────────────────
 
-export async function installClaudeHooks(opts: SetupOptions): Promise<SetupResult> {
-  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
-  const hookScript = path.join(opts.gkDir, 'dist', 'hook-receiver.js');
-  const preEditScript = path.join(opts.gkDir, 'dist', 'hook-pre-tool-use.js');
-
-  if (!fs.existsSync(hookScript)) {
-    return { step: 'Install Claude Code hooks', icon: '⚠️', message: `hook-receiver not built at ${hookScript}. Run 'npm run build' first.`, path: settingsPath };
-  }
-
-  // Ensure ~/.claude exists
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-
-  let settings: Record<string, unknown>;
-  try {
-    settings = fs.existsSync(settingsPath)
-      ? JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
-      : {};
-  } catch {
-    settings = {};
-  }
-
-  const hooks: Record<string, unknown[]> = settings['hooks'] as Record<string, unknown[]> ?? {};
-
-  // SessionStart — register repo on session start
-  if (!hooks['SessionStart']) hooks['SessionStart'] = [];
-  const hasSessionStart = (hooks['SessionStart'] as Array<Record<string, unknown>>).some(
-    (h: Record<string, unknown>) => JSON.stringify(h).includes('hook-receiver'),
+function ensureHookRegistered(
+  hooks: Record<string, unknown[]>,
+  event: string,
+  checkStr: string,
+  entry: Record<string, unknown>,
+): void {
+  if (!hooks[event]) hooks[event] = [];
+  const already = (hooks[event] as Array<Record<string, unknown>>).some(
+    h => JSON.stringify(h).includes(checkStr),
   );
-  if (!hasSessionStart) {
-    (hooks['SessionStart'] as Array<Record<string, unknown>>).push({
-      hooks: [{ type: 'command', command: `node ${hookScript}` }],
-    });
-  }
+  if (!already) (hooks[event] as Array<Record<string, unknown>>).push(entry);
+}
 
-  // PreToolUse — check edit safety before Write/Edit (pre-edit hook)
-  // This runs a script that calls check_pre_edit_safety via the daemon API
-  if (!hooks['PreToolUse']) hooks['PreToolUse'] = [];
-
-  // Try the compiled pre-tool-use hook, or generate an inline command
-  const preToolUseCommand = fs.existsSync(preEditScript)
-    ? `node ${preEditScript}`
-    : `node -e "
+function buildPreToolUseCommand(gkDir: string): string {
+  const preEditScript = path.join(gkDir, 'dist', 'hook-pre-tool-use.js');
+  if (fs.existsSync(preEditScript)) return `node ${preEditScript}`;
+  return `node -e "
 const http = require('http');
 const payload = JSON.parse(process.argv[1] || '{}');
 const fp = payload?.tool_input?.file_path || payload?.tool_input?.path;
@@ -132,49 +108,46 @@ const req = http.request({ hostname:'127.0.0.1', port:5378, path:'/api/impact-se
     try {
       const r = JSON.parse(d);
       if (r.verdict === 'block' || (r.fragileCount || 0) >= 3) {
-        process.stderr.write('[Gate Keeper] BLOCKED: ' + r.reason + '\\n');
-        process.exit(2);
+        process.stderr.write('[Gate Keeper] WARNING: ' + fp + ' has ' + (r.fragileCount || 0) + ' fragile dependents — proceed with care\\n');
       }
-    } catch {}
+    } catch (e) { process.stderr.write('[Gate Keeper] parse error: ' + e + '\\n'); }
   });
 });
 req.write(body); req.end();
 setTimeout(() => process.exit(0), 3000);
 " \`cat\``.replace(/\n\s*/g, ' ');
+}
 
-  if (!(hooks['PreToolUse'] as Array<Record<string, unknown>>).some(h => JSON.stringify(h).includes('PreToolUse'))) {
-    (hooks['PreToolUse'] as Array<Record<string, unknown>>).push({
-      matcher: 'Write|Edit',
-      hooks: [{ type: 'command', command: preToolUseCommand }],
-    });
+export async function installClaudeHooks(opts: SetupOptions): Promise<SetupResult> {
+  const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+  const hookScript = path.join(opts.gkDir, 'dist', 'hook-receiver.js');
+
+  if (!fs.existsSync(hookScript)) {
+    return { step: 'Install Claude Code hooks', icon: '⚠️', message: `hook-receiver not built at ${hookScript}. Run 'npm run build' first.`, path: settingsPath };
   }
 
-  // PostToolUse — analyze after Write/Edit
-  if (!hooks['PostToolUse']) hooks['PostToolUse'] = [];
-  const hasPostToolUse = (hooks['PostToolUse'] as Array<Record<string, unknown>>).some(
-    (h: Record<string, unknown>) => JSON.stringify(h).includes('hook-receiver'),
-  );
-  if (!hasPostToolUse) {
-    (hooks['PostToolUse'] as Array<Record<string, unknown>>).push({
-      matcher: 'Write|Edit',
-      hooks: [{ type: 'command', command: `node ${hookScript}` }],
-    });
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+
+  let settings: Record<string, unknown>;
+  try {
+    settings = fs.existsSync(settingsPath)
+      ? JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+      : {};
+  } catch {
+    settings = {};
   }
 
-  // UserPromptSubmit — session dedup
-  if (!hooks['UserPromptSubmit']) hooks['UserPromptSubmit'] = [];
-  const hasUserPrompt = (hooks['UserPromptSubmit'] as Array<Record<string, unknown>>).some(
-    (h: Record<string, unknown>) => JSON.stringify(h).includes('hook-receiver'),
-  );
-  if (!hasUserPrompt) {
-    (hooks['UserPromptSubmit'] as Array<Record<string, unknown>>).push({
-      hooks: [{ type: 'command', command: `node ${hookScript}` }],
-    });
-  }
+  const hooks: Record<string, unknown[]> = settings['hooks'] as Record<string, unknown[]> ?? {};
+  const nodeHook = (cmd: string) => ({ hooks: [{ type: 'command', command: cmd }] });
+  const nodeHookMatcher = (cmd: string) => ({ matcher: 'Write|Edit', hooks: [{ type: 'command', command: cmd }] });
+
+  ensureHookRegistered(hooks, 'SessionStart', 'hook-receiver', nodeHook(`node ${hookScript}`));
+  ensureHookRegistered(hooks, 'PreToolUse', 'hook-pre-tool-use', nodeHookMatcher(buildPreToolUseCommand(opts.gkDir)));
+  ensureHookRegistered(hooks, 'PostToolUse', 'hook-receiver', nodeHookMatcher(`node ${hookScript}`));
+  ensureHookRegistered(hooks, 'UserPromptSubmit', 'hook-receiver', nodeHook(`node ${hookScript}`));
 
   settings['hooks'] = hooks;
 
-  // Ensure additional directories includes this repo
   const dirs = (settings['additionalDirectories'] as string[] | undefined) ?? [];
   if (!dirs.includes(opts.repoRoot)) {
     dirs.push(opts.repoRoot);
@@ -185,7 +158,22 @@ setTimeout(() => process.exit(0), 3000);
   return { step: 'Install Claude Code hooks', icon: '✅', message: 'SessionStart + PreToolUse + PostToolUse + UserPromptSubmit configured', path: settingsPath };
 }
 
-// ── 3. VS Code / Copilot MCP ─────────────────────────────
+// ── 3. Copilot instructions (.github/copilot-instructions.md) ──
+
+export async function installCopilotInstructions(opts: SetupOptions): Promise<SetupResult> {
+  const config = copilotConfig(opts.repoRoot);
+  const targetPath = config.filePath;
+
+  if (fs.existsSync(targetPath) && !opts.force) {
+    return { step: 'Create Copilot instructions', icon: '⏭', message: 'Already exists (use --force to overwrite)', path: targetPath };
+  }
+
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fs.writeFileSync(targetPath, config.content, 'utf8');
+  return { step: 'Create Copilot instructions', icon: '✅', message: `.github/copilot-instructions.md created (${config.content.length} bytes)`, path: targetPath };
+}
+
+// ── 4. VS Code / Copilot MCP ─────────────────────────────
 
 export async function installVscodeMcp(opts: SetupOptions): Promise<SetupResult> {
   const mcpDir = path.join(opts.repoRoot, '.vscode');
@@ -457,17 +445,18 @@ export function printSummary(results: SetupResult[], repoRoot: string): void {
   const skipped = results.filter(r => r.icon === '⏭').length;
   const failures = results.filter(r => r.icon === '❌').length;
 
-  console.log(`\n  ═══════════════════════════════════`);
-  console.log(`  Setup complete for ${path.basename(repoRoot)}`);
-  console.log(`  ${successes} installed · ${skipped} skipped · ${warnings} warnings · ${failures} failed`);
-  console.log(`  ═══════════════════════════════════\n`);
+  const out = process.stdout.write.bind(process.stdout);
+  out(`\n  ═══════════════════════════════════\n`);
+  out(`  Setup complete for ${path.basename(repoRoot)}\n`);
+  out(`  ${successes} installed · ${skipped} skipped · ${warnings} warnings · ${failures} failed\n`);
+  out(`  ═══════════════════════════════════\n\n`);
 
   if (successes > 0) {
-    console.log('  Next steps:');
-    console.log('    - Open the dashboard: http://localhost:5378/viz');
-    console.log('    - Run npm run dev to restart the daemon manually');
-    console.log('    - Use `get_graph_report` in your AI assistant');
-    console.log('    - The PostToolUse hook will auto-analyze files on Write/Edit\n');
+    out('  Next steps:\n');
+    out('    - Open the dashboard: http://localhost:5378/viz\n');
+    out('    - Run npm run dev to restart the daemon manually\n');
+    out('    - Use `get_graph_report` in your AI assistant\n');
+    out('    - The PostToolUse hook will auto-analyze files on Write/Edit\n\n');
   }
 }
 

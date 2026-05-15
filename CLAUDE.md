@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Quality Checks:** @.github/instructions/gate-keeper-quality-check.instructions.md
+**Mandatory Skill:** `gate-keeper-quality` — the full quality workflow (tool cheat sheet, phased steps, hard rules, and thresholds) is defined in the gate-keeper-quality skill. Follow every phase: Session Start → Before Change → After Edit → Post-Edit Verification. No exceptions.
 
 ---
 
@@ -208,13 +208,9 @@ hook-receiver (stdin JSON)               hook-pre-tool-use (stdin JSON)
 
 ---
 
-## Quality workflow (dogfooding)
+## Quality workflow
 
-1. Existing files: `get_file_context` → edit → `analyze_file` (target ≥ 7.0)
-2. New files: `analyze_code` before writing, `analyze_file` after
-3. Widely imported: `get_impact_set` before editing, check for fragile dependents
-4. After bulk changes (3+): `get_codebase_health`
-5. Use `check_pre_edit_safety` as the gate before every edit
+**Mandatory:** Follow the `gate-keeper-quality` skill for every code action — session start setup, pre-edit safety checks, post-edit analysis, and bulk verification. See the skill (loaded automatically at session start) for the complete phased workflow.
 
 ---
 

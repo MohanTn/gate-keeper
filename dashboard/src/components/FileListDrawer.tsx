@@ -12,66 +12,67 @@ interface FileListDrawerProps {
 
 type SortField = 'rating' | 'label' | 'linesOfCode' | 'violations';
 
-// ── Main Component ─────────────────────────────────────────
-export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }: FileListDrawerProps) {
+const NUMERIC_SORT: Partial<Record<SortField, (n: GraphNode) => number>> = {
+  rating: n => n.rating,
+  linesOfCode: n => n.metrics.linesOfCode,
+  violations: n => n.violations.length,
+};
+
+const TOGGLE_DIR: Record<'asc' | 'desc', 'asc' | 'desc'> = { asc: 'desc', desc: 'asc' };
+
+interface FileListState {
+  search: string;
+  sortField: SortField;
+  sortDir: 'asc' | 'desc';
+}
+
+// ── Custom hook — consolidates all state, handlers, and derived data ──
+function useFileListState(graphData: GraphData) {
   const { T } = useTheme();
-  const [state, setState] = useState<{ search: string; sortField: SortField; sortDir: 'asc' | 'desc' }>(
-    { search: '', sortField: 'rating', sortDir: 'asc' }
-  );
+  const [state, setState] = useState<FileListState>({ search: '', sortField: 'rating', sortDir: 'asc' });
   const { search, sortField, sortDir } = state;
 
-  const handleCloseBtnEnter = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.color = T.text;
-  }, [T.text]);
-  const handleCloseBtnLeave = useCallback((e: React.MouseEvent<HTMLButtonElement>) => {
-    e.currentTarget.style.color = T.textMuted;
-  }, [T.textMuted]);
+  const handlers = useMemo(() => ({
+    closeBtnEnter: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = T.text; },
+    closeBtnLeave: (e: React.MouseEvent<HTMLButtonElement>) => { e.currentTarget.style.color = T.textMuted; },
+    searchChange: (e: React.ChangeEvent<HTMLInputElement>) => { setState(prev => ({ ...prev, search: e.target.value })); },
+    searchFocus: (e: React.FocusEvent<HTMLInputElement>) => { e.currentTarget.style.borderColor = T.accent; },
+    searchBlur: (e: React.FocusEvent<HTMLInputElement>) => { e.currentTarget.style.borderColor = T.border; },
+    sort: (field: SortField) => {
+      setState(prev => ({
+        ...prev, sortField: field,
+        sortDir: prev.sortField === field ? TOGGLE_DIR[prev.sortDir] : 'asc',
+      }));
+    },
+  }), [T.text, T.textMuted, T.accent, T.border]);
 
-  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setState(prev => ({ ...prev, search: e.target.value }));
-  }, []);
-
-  const handleSearchFocus = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    e.currentTarget.style.borderColor = T.accent;
-  }, [T.accent]);
-  const handleSearchBlur = useCallback((e: React.FocusEvent<HTMLInputElement>) => {
-    e.currentTarget.style.borderColor = T.border;
-  }, [T.border]);
-
-  const handleSort = useCallback((field: SortField) => {
-    setState(prev => {
-      if (prev.sortField === field) {
-        return { ...prev, sortDir: prev.sortDir === 'asc' ? 'desc' : 'asc' };
-      }
-      return { ...prev, sortField: field, sortDir: 'asc' };
+  const computed = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const nodes = q
+      ? graphData.nodes.filter(n => `${n.label}|${n.id}`.toLowerCase().includes(q))
+      : graphData.nodes;
+    const filtered = [...nodes].sort((a, b) => {
+      const numFn = NUMERIC_SORT[sortField];
+      if (!numFn) return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label);
+      return sortDir === 'asc' ? numFn(a) - numFn(b) : numFn(b) - numFn(a);
     });
-  }, []);
 
-  const filtered = useMemo(() => {
-    let nodes = graphData.nodes;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      nodes = nodes.filter(n => n.label.toLowerCase().includes(q) || n.id.toLowerCase().includes(q));
-    }
-    return [...nodes].sort((a, b) => {
-      let av: number, bv: number;
-      if (sortField === 'label') return sortDir === 'asc' ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label);
-      if (sortField === 'rating') { av = a.rating; bv = b.rating; }
-      else if (sortField === 'linesOfCode') { av = a.metrics.linesOfCode; bv = b.metrics.linesOfCode; }
-      else { av = a.violations.length; bv = b.violations.length; }
-      return sortDir === 'asc' ? av - bv : bv - av;
-    });
+    const totalLoc = graphData.nodes.reduce((acc, n) => acc + (n.metrics.linesOfCode || 1), 0);
+    const totalViolations = graphData.nodes.reduce((acc, n) => acc + n.violations.length, 0);
+    const errors = graphData.nodes.reduce((acc, n) => acc + n.violations.filter(v => v.severity === 'error').length, 0);
+    const overallRating = totalLoc > 0
+      ? Math.round((graphData.nodes.reduce((acc, n) => acc + n.rating * (n.metrics.linesOfCode || 1), 0) / totalLoc) * 10) / 10
+      : null;
+
+    return { filtered, stats: { overallRating, totalViolations, errors } };
   }, [graphData.nodes, search, sortField, sortDir]);
 
-  const stats = useMemo(() => {
-    const totalLoc = graphData.nodes.reduce((a, n) => a + (n.metrics.linesOfCode || 1), 0);
-    const overallRating = graphData.nodes.length > 0 && totalLoc > 0
-      ? Math.round((graphData.nodes.reduce((a, n) => a + n.rating * (n.metrics.linesOfCode || 1), 0) / totalLoc) * 10) / 10
-      : null;
-    const totalViolations = graphData.nodes.reduce((a, n) => a + n.violations.length, 0);
-    const errors = graphData.nodes.reduce((a, n) => a + n.violations.filter(v => v.severity === 'error').length, 0);
-    return { overallRating, totalViolations, errors };
-  }, [graphData.nodes]);
+  return { T, state: { search, sortField, sortDir }, handlers, ...computed };
+}
+
+// ── Main Component ─────────────────────────────────────────
+export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }: FileListDrawerProps) {
+  const { T, state: { search, sortField, sortDir }, handlers, filtered, stats } = useFileListState(graphData);
 
   return (
     <div
@@ -91,8 +92,8 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
                 background: 'none', border: `1px solid ${T.border}`, color: T.textMuted,
                 borderRadius: 4, padding: '3px 10px', cursor: 'pointer', fontSize: 11,
               }}
-              onMouseEnter={handleCloseBtnEnter}
-              onMouseLeave={handleCloseBtnLeave}
+              onMouseEnter={handlers.closeBtnEnter}
+              onMouseLeave={handlers.closeBtnLeave}
             >
               Close
             </button>
@@ -113,15 +114,15 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
           <input
             type="text"
             value={search}
-            onChange={handleSearchChange}
+            onChange={handlers.searchChange}
             placeholder="Filter files…"
             style={{
               width: '100%', padding: '6px 10px',
               background: T.elevated, border: `1px solid ${T.border}`,
               borderRadius: 4, color: T.text, fontSize: 12, outline: 'none',
             }}
-            onFocus={handleSearchFocus}
-            onBlur={handleSearchBlur}
+            onFocus={handlers.searchFocus}
+            onBlur={handlers.searchBlur}
           />
         </div>
 
@@ -137,7 +138,7 @@ export function FileListDrawer({ graphData, onNodeSelect, onClose, width = 400 }
               label={label}
               active={sortField === field}
               dir={sortField === field ? sortDir : 'asc'}
-              onSort={handleSort}
+              onSort={handlers.sort}
             />
           ))}
         </div>

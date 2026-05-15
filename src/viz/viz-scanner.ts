@@ -5,7 +5,6 @@ import { UniversalAnalyzer } from '../analyzer/universal-analyzer';
 import { FileAnalysis, Config, WSMessage } from '../types';
 import { walkFiles, shouldExcludeFile } from './viz-helpers';
 import { loadGraphifyIgnore, shouldIgnoreByGraphifyIgnore } from '../graph/graphify-ignore';
-import { readArchConfig, writeArchConfig, autoDetectLayer, DEFAULT_LAYERS, getEffectiveLayer } from '../arch/arch-config-manager';
 
 interface ScannerDeps {
   cache: SqliteCache;
@@ -87,7 +86,6 @@ export async function scan(deps: ScannerDeps): Promise<void> {
   const CONCURRENCY = 8;
   let analyzed = 0;
   let lastProgress = 0;
-  const archUpdates = new Map<string, Record<string, string>>();
 
   for (let i = 0; i < toScan.length; i += CONCURRENCY) {
     const batch = toScan.slice(i, i + CONCURRENCY);
@@ -96,13 +94,6 @@ export async function scan(deps: ScannerDeps): Promise<void> {
         const analysis = await deps.analyzer.analyze(filePath);
         if (!analysis) return;
         analysis.repoRoot = root;
-
-        // Detect and store layer
-        const relPath = path.relative(root, filePath);
-        const detectedLayer = autoDetectLayer(filePath, root, DEFAULT_LAYERS);
-        analysis.layer = detectedLayer;
-        if (!archUpdates.has(root)) archUpdates.set(root, {});
-        archUpdates.get(root)![relPath] = detectedLayer;
 
         deps.cache.save(analysis);
         deps.graphFor(root).upsert(analysis);
@@ -131,17 +122,6 @@ export async function scan(deps: ScannerDeps): Promise<void> {
       }
       lastProgress = analyzed;
     }
-  }
-
-  // Batch-write arch configs for all roots
-  for (const [root, updates] of archUpdates) {
-    const archConfig = readArchConfig(root);
-    for (const [relPath, layer] of Object.entries(updates)) {
-      if (!archConfig.overrides[relPath]) {
-        archConfig.files[relPath] = layer;
-      }
-    }
-    writeArchConfig(root, archConfig);
   }
 
   const completionRoots = new Set(toScan.map(s => s.root));
@@ -205,7 +185,6 @@ export async function scanRepo(deps: ScannerDeps, repoRoot: string, force = fals
   const CONCURRENCY = 8;
   let analyzed = 0;
   let lastProgress = 0;
-  const archUpdates: Record<string, string> = {};
 
   for (let i = 0; i < toScan.length; i += CONCURRENCY) {
     const batch = toScan.slice(i, i + CONCURRENCY);
@@ -214,12 +193,6 @@ export async function scanRepo(deps: ScannerDeps, repoRoot: string, force = fals
         const analysis = await deps.analyzer.analyze(filePath);
         if (!analysis) return;
         analysis.repoRoot = repoRoot;
-
-        // Detect and store layer
-        const relPath = path.relative(repoRoot, filePath);
-        const detectedLayer = autoDetectLayer(filePath, repoRoot, DEFAULT_LAYERS);
-        analysis.layer = detectedLayer;
-        archUpdates[relPath] = detectedLayer;
 
         deps.cache.save(analysis);
         deps.graphFor(repoRoot).upsert(analysis);
@@ -249,15 +222,6 @@ export async function scanRepo(deps: ScannerDeps, repoRoot: string, force = fals
       lastProgress = analyzed;
     }
   }
-
-  // Batch-write arch config for this repo
-  const archConfig = readArchConfig(repoRoot);
-  for (const [relPath, layer] of Object.entries(archUpdates)) {
-    if (!archConfig.overrides[relPath]) {
-      archConfig.files[relPath] = layer;
-    }
-  }
-  writeArchConfig(repoRoot, archConfig);
 
   deps.broadcast({ type: 'init', data: deps.graphFor(repoRoot).toGraphData() } satisfies WSMessage, repoRoot);
   deps.broadcast({ type: 'scan_complete', scanTotal: toScan.length, scanAnalyzed: analyzed } satisfies WSMessage);

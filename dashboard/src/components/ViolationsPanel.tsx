@@ -1,14 +1,11 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { GraphData, Violation } from '../types';
 import { ThemeTokens } from '../ThemeContext';
+import { buildCopyText, toFixStr, FileViolationItem } from '../utils/violation-formatter';
 
 type SeverityFilter = 'all' | 'error' | 'warning' | 'info';
 
-interface FileViolation {
-  fileLabel: string;
-  fileId: string;
-  violation: Violation;
-}
+type FileViolation = FileViolationItem;
 
 interface ViolationsPanelProps {
   graphData: GraphData;
@@ -28,27 +25,6 @@ function severityBadge(sev: Violation['severity']): string {
   return 'INFO';
 }
 
-function buildCopyText(items: FileViolation[]): string {
-  const grouped = new Map<string, FileViolation[]>();
-  for (const item of items) {
-    const existing = grouped.get(item.fileId) ?? [];
-    existing.push(item);
-    grouped.set(item.fileId, existing);
-  }
-
-  const lines: string[] = [];
-  for (const [, fileItems] of grouped) {
-    const first = fileItems[0];
-    lines.push(`### ${first.fileLabel}`);
-    for (const fi of fileItems) {
-      const loc = fi.violation.line ? ` (line ${fi.violation.line})` : '';
-      lines.push(`  [${fi.violation.severity.toUpperCase()}] ${fi.violation.message}${loc}`);
-      if (fi.violation.fix) lines.push(`    Fix: ${fi.violation.fix}`);
-    }
-    lines.push('');
-  }
-  return lines.join('\n').trim();
-}
 
 function useViolationsPanel(graphData: GraphData, T: ThemeTokens) {
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>('all');
@@ -335,7 +311,7 @@ function ViolationRow({ item, T }: { item: FileViolation; T: ThemeTokens }) {
           </div>
           {violation.fix && (
             <div style={{ fontSize: 11, color: T.textMuted, marginTop: 3, fontStyle: 'italic' }}>
-              → {violation.fix}
+              → {toFixStr(violation.fix)}
             </div>
           )}
         </div>

@@ -26,6 +26,7 @@ import {
   InstallationStep,
   defaultGraphifyIgnore,
   installClaudeHooks,
+  installCopilotInstructions,
   installVscodeMcp,
   installCursorRules,
   installGitHubWorkflow,
@@ -38,7 +39,7 @@ import {
 
 // ── Main ───────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const repoDir = findArg(args, '--dir') ?? process.cwd();
   const repoRoot = findGitRoot(repoDir);
@@ -91,7 +92,7 @@ async function main(): Promise<void> {
 
 // ── CLI helpers ───────────────────────────────────────────
 
-function findArg(args: string[], name: string): string | null {
+export function findArg(args: string[], name: string): string | null {
   for (const a of args) {
     if (a.startsWith(`${name}=`)) return a.slice(name.length + 1);
     if (a === name) return args[args.indexOf(a) + 1] ?? null;
@@ -99,14 +100,14 @@ function findArg(args: string[], name: string): string | null {
   return null;
 }
 
-function findGitRoot(dir: string): string {
+export function findGitRoot(dir: string): string {
   const result = spawnSync('git', ['rev-parse', '--show-toplevel'], {
     cwd: dir, encoding: 'utf8', timeout: 3000,
   });
   return result.status === 0 && result.stdout.trim() ? result.stdout.trim() : dir;
 }
 
-function buildSteps(opts: SetupOptions): InstallationStep[] {
+export function buildSteps(opts: SetupOptions): InstallationStep[] {
   const steps: InstallationStep[] = [];
 
   if (opts.all || true) {
@@ -118,6 +119,7 @@ function buildSteps(opts: SetupOptions): InstallationStep[] {
   }
 
   if (opts.all || opts.copilot) {
+    steps.push({ label: 'Create Copilot instructions', run: () => installCopilotInstructions(opts) });
     steps.push({ label: 'Configure VS Code / Copilot MCP', run: () => installVscodeMcp(opts) });
   }
 
